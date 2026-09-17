@@ -123,7 +123,7 @@
       <span><span class="swatch" style="background:var(--accent-soft); border:1.5px solid var(--accent);"></span>Main dining room</span>
       <span><span class="swatch" style="background:var(--patio-soft); border:1.5px solid var(--patio);"></span>Patio</span>
       <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Occupied at the time above</span>
-      <span style="margin-left:auto; color:var(--ink-soft);">Drag a reservation from the list onto a table to assign it. In edit mode, drag boxes to arrange, then Save layout.</span>
+      <span style="margin-left:auto; color:var(--ink-soft);">Drag a reservation from the list onto a table to assign it. In edit mode, drag boxes to arrange, or click one to rename/resize/remove — then Save layout.</span>
     </div>
     <div id="add-table-wrap" hidden>
       <div class="add-table-row">
@@ -272,13 +272,14 @@
   function startDrag(e, box, tableId) {
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
-    box.classList.add('dragging');
-    const floorRect = $('floorplan').getBoundingClientRect();
     const startLeft = box.offsetLeft, startTop = box.offsetTop;
     const startX = e.clientX, startY = e.clientY;
+    let moved = false; // only counts as a drag past a small threshold, so a plain click opens the editor
 
     function onMove(ev) {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      if (!moved) { moved = true; box.classList.add('dragging'); }
       const newX = Math.max(0, startLeft + dx);
       const newY = Math.max(0, startTop + dy);
       box.style.left = newX + 'px';
@@ -289,9 +290,64 @@
       box.classList.remove('dragging');
       box.removeEventListener('pointermove', onMove);
       box.removeEventListener('pointerup', onUp);
+      if (!moved) openTableEditor(tableId);
     }
     box.addEventListener('pointermove', onMove);
     box.addEventListener('pointerup', onUp);
+  }
+
+  // Edit mode: clicking a box (rather than dragging it) opens a rename/resize/remove form
+  // in the same panel used to show a table's reservations in view mode.
+  function openTableEditor(tableId) {
+    const t = tables.find((tb) => tb.id === tableId);
+    if (!t) return;
+    const el = $('table-popover');
+    el.innerHTML = `
+      <div class="table-popover">
+        <h3>Edit ${escapeHtml(t.name)}</h3>
+        <div class="add-table-row">
+          <input type="text" id="edit-table-name" value="${escapeHtml(t.name)}" placeholder="Name">
+          <input type="number" id="edit-table-capacity" value="${t.capacity}" min="1" placeholder="Seats">
+          <select id="edit-table-section">
+            <option value="Main" ${t.section === 'Main' ? 'selected' : ''}>Main</option>
+            <option value="Patio" ${t.section === 'Patio' ? 'selected' : ''}>Patio</option>
+          </select>
+          <button id="edit-table-save" class="primary">Save</button>
+          <button id="edit-table-remove" class="danger">Remove table</button>
+          <button id="edit-table-cancel">Cancel</button>
+        </div>
+      </div>`;
+
+    $('edit-table-save').addEventListener('click', async () => {
+      const name = $('edit-table-name').value.trim();
+      const capacity = Number($('edit-table-capacity').value);
+      const section = $('edit-table-section').value;
+      if (!name || !capacity) return;
+      await fetch(`/api/tables/${tableId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, capacity, section }),
+      });
+      el.innerHTML = '';
+      load();
+    });
+
+    $('edit-table-remove').addEventListener('click', async () => {
+      const todaysCount = reservations.filter((r) => r.table_id === tableId && r.status !== 'cancelled').length;
+      const warning = todaysCount
+        ? `${t.name} has ${todaysCount} reservation${todaysCount === 1 ? '' : 's'} today. Remove it anyway? Those bookings will keep their time and party size but lose their table assignment.`
+        : `Remove ${t.name} from the floor plan? You can always add it back later.`;
+      if (!confirm(warning)) return;
+      await fetch(`/api/tables/${tableId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: 0 }),
+      });
+      el.innerHTML = '';
+      load();
+    });
+
+    $('edit-table-cancel').addEventListener('click', () => { el.innerHTML = ''; });
   }
 
   function showTablePopover(t, todaysReservations) {
