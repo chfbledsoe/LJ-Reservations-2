@@ -9,19 +9,20 @@
   :root{
     --bg:#F6F4EC; --surface:#FFFFFF; --surface-2:#EFEBDD; --ink:#2A2820; --ink-soft:#5B5748;
     --line:#DCD5C1; --accent:#3C5A45; --accent-soft:#E4EBE2; --amber:#A97A2E; --amber-soft:#F3E6CC;
-    --danger:#A9642E; --danger-soft:#F3E1CC;
+    --danger:#A9642E; --danger-soft:#F3E1CC; --patio:#3D6B8A; --patio-soft:#E1EBF1;
   }
   *{ box-sizing:border-box; }
   body{
     margin:0; background:var(--bg); color:var(--ink);
     font-family:"IBM Plex Sans", system-ui, sans-serif; padding: 20px 16px 60px;
   }
-  .wrap{ max-width: 920px; margin: 0 auto; }
-  h1{ font-family:"Spectral", serif; font-size: 1.5rem; margin: 0 0 16px; }
-  .toolbar{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; margin-bottom: 18px; }
-  input[type=date]{
+  .wrap{ max-width: 980px; margin: 0 auto; }
+  h1{ font-family:"Spectral", serif; font-size: 1.5rem; margin: 0 0 4px; }
+  h2{ font-family:"Spectral", serif; font-size: 1.15rem; margin: 0 0 10px; }
+  .toolbar{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; margin: 14px 0 18px; }
+  input[type=date], input[type=text], input[type=number], select{
     padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit;
-    background: var(--surface); color: var(--ink);
+    background: var(--surface); color: var(--ink); font-size: 0.85rem;
   }
   .stat{
     font-family:"IBM Plex Mono", monospace; font-size: 0.8rem; color: var(--ink-soft);
@@ -32,7 +33,46 @@
   button.primary{ background: var(--accent); border-color: var(--accent); color: #fff; }
   button.warn{ background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
   button.danger{ background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
-  table{ width:100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow:hidden; }
+
+  section.panel{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 22px; }
+  .panel-head{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom: 10px; }
+
+  /* --- Floor plan --- */
+  #floorplan{
+    position: relative; height: 420px; background:
+      linear-gradient(var(--surface-2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--surface-2) 1px, transparent 1px);
+    background-size: 20px 20px; border: 1px dashed var(--line); border-radius: 8px;
+    overflow: auto; touch-action: none;
+  }
+  .table-box{
+    position: absolute; border-radius: 8px; border: 2px solid var(--accent);
+    background: var(--accent-soft); display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-size: 0.74rem; font-weight:600; cursor: pointer; user-select:none; color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .table-box.patio{ border-color: var(--patio); background: var(--patio-soft); }
+  .table-box.occupied{ border-style: solid; box-shadow: 0 0 0 3px var(--amber-soft); }
+  .table-box .cap{ font-weight:400; color: var(--ink-soft); font-size: 0.68rem; }
+  .table-box.dragging{ opacity: 0.7; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 5; }
+  .legend{ display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-size:0.76rem; color:var(--ink-soft); align-items:center; }
+  .swatch{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
+
+  .add-table-row{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; }
+  .add-table-row input[type=text]{ width:80px; }
+  .add-table-row input[type=number]{ width:64px; }
+
+  .table-popover{
+    margin-top: 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; font-size: 0.84rem;
+  }
+  .table-popover h3{ margin:0 0 6px; font-size:0.88rem; }
+  .table-popover .row{ display:flex; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid var(--line); }
+  .table-popover .row:last-child{ border-bottom:none; }
+  .remove-x{ background:none; border:none; color:var(--danger); cursor:pointer; font-size:0.9rem; padding:0 4px; }
+
+  /* --- Reservation list --- */
+  table.list{ width:100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow:hidden; }
   thead th{
     text-align:left; font-family:"IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing:0.05em;
     text-transform:uppercase; color: var(--ink-soft); background: var(--surface-2);
@@ -51,7 +91,7 @@
   .pill.cancelled, .pill.no_show{ background: var(--danger-soft); color: var(--danger); }
   .actions{ display:flex; gap: 6px; flex-wrap: wrap; }
   .empty{ padding: 30px; text-align:center; color: var(--ink-soft); }
-  .notes{ font-size: 0.8rem; color: var(--ink-soft); max-width: 220px; }
+  .notes{ font-size: 0.8rem; color: var(--ink-soft); max-width: 200px; }
 </style>
 </head>
 <body>
@@ -63,14 +103,44 @@
     <span class="stat" id="stat"></span>
   </div>
 
-  <div id="table-wrap">
-    <table id="tbl">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Floor plan</h2>
+      <div style="display:flex; gap:8px;">
+        <button id="edit-layout-btn">Edit layout</button>
+        <button id="save-layout-btn" class="primary" hidden>Save layout</button>
+      </div>
+    </div>
+    <div id="floorplan"></div>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--accent-soft); border:1.5px solid var(--accent);"></span>Main dining room</span>
+      <span><span class="swatch" style="background:var(--patio-soft); border:1.5px solid var(--patio);"></span>Patio</span>
+      <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Has a reservation this date</span>
+      <span style="margin-left:auto; color:var(--ink-soft);">In edit mode: drag boxes to arrange, then Save layout.</span>
+    </div>
+    <div id="add-table-wrap" hidden>
+      <div class="add-table-row">
+        <input type="text" id="new-table-name" placeholder="Name (e.g. T9)">
+        <input type="number" id="new-table-capacity" placeholder="Seats" min="1">
+        <select id="new-table-section">
+          <option value="Main">Main</option>
+          <option value="Patio">Patio</option>
+        </select>
+        <button id="add-table-btn" class="primary">+ Add table</button>
+      </div>
+    </div>
+    <div id="table-popover"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Today's reservations</h2>
+    <table class="list" id="tbl">
       <thead>
         <tr><th>Time</th><th>Guest</th><th>Party</th><th>Table</th><th>Notes</th><th>Status</th><th>Actions</th></tr>
       </thead>
       <tbody id="tbody"></tbody>
     </table>
-  </div>
+  </section>
 </div>
 
 <script>
@@ -78,35 +148,195 @@
   const dateInput = $('date');
   dateInput.value = new Date().toISOString().slice(0, 10);
 
+  let tables = [];
+  let reservations = [];
+  let editMode = false;
+  let dirtyPositions = {}; // tableId -> {pos_x, pos_y}, not yet saved
+
   async function load() {
     const date = dateInput.value;
-    const res = await fetch(`/api/reservations?date=${date}`);
-    if (res.status === 401) {
+    const [resR, resT] = await Promise.all([
+      fetch(`/api/reservations?date=${date}`),
+      fetch('/api/tables'),
+    ]);
+    if (resR.status === 401 || resT.status === 401) {
       document.body.innerHTML = '<p style="padding:40px;font-family:sans-serif">Sign in required — reload the page and enter the staff username/password.</p>';
       return;
     }
-    const data = await res.json();
-    render(data.reservations || []);
+    const dataR = await resR.json();
+    const dataT = await resT.json();
+    reservations = dataR.reservations || [];
+    tables = dataT.tables || [];
+    dirtyPositions = {};
+    renderStat();
+    renderFloorplan();
+    renderList();
   }
 
-  function render(rows) {
+  function renderStat() {
+    const active = reservations.filter((r) => r.status !== 'cancelled');
+    $('stat').textContent = `${active.length} reservation${active.length === 1 ? '' : 's'} · ${active.reduce((s, r) => s + r.party_size, 0)} covers`;
+  }
+
+  // --- Floor plan ---
+
+  function boxSize(capacity) {
+    if (capacity <= 2) return [72, 60];
+    if (capacity <= 4) return [92, 60];
+    if (capacity <= 6) return [112, 60];
+    return [140, 70];
+  }
+
+  function fallbackPosition(index) {
+    const col = index % 5, row = Math.floor(index / 5);
+    return { x: 30 + col * 140, y: 30 + row * 100 };
+  }
+
+  function renderFloorplan() {
+    const el = $('floorplan');
+    el.innerHTML = '';
+    tables.forEach((t, i) => {
+      const pos = dirtyPositions[t.id] || (t.pos_x != null ? { x: t.pos_x, y: t.pos_y } : fallbackPosition(i));
+      const [w, h] = boxSize(t.capacity);
+      const todaysReservations = reservations.filter((r) => r.table_id === t.id && r.status !== 'cancelled');
+
+      const box = document.createElement('div');
+      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + (todaysReservations.length ? ' occupied' : '');
+      box.style.left = pos.x + 'px';
+      box.style.top = pos.y + 'px';
+      box.style.width = w + 'px';
+      box.style.height = h + 'px';
+      box.dataset.id = t.id;
+      box.innerHTML = `<div>${escapeHtml(t.name)}</div><div class="cap">seats ${t.capacity}</div>`;
+
+      if (editMode) {
+        box.addEventListener('pointerdown', (e) => startDrag(e, box, t.id));
+      } else {
+        box.addEventListener('click', () => showTablePopover(t, todaysReservations));
+      }
+      el.appendChild(box);
+    });
+  }
+
+  function startDrag(e, box, tableId) {
+    e.preventDefault();
+    box.setPointerCapture(e.pointerId);
+    box.classList.add('dragging');
+    const floorRect = $('floorplan').getBoundingClientRect();
+    const startLeft = box.offsetLeft, startTop = box.offsetTop;
+    const startX = e.clientX, startY = e.clientY;
+
+    function onMove(ev) {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      const newX = Math.max(0, startLeft + dx);
+      const newY = Math.max(0, startTop + dy);
+      box.style.left = newX + 'px';
+      box.style.top = newY + 'px';
+      dirtyPositions[tableId] = { x: newX, y: newY };
+    }
+    function onUp(ev) {
+      box.classList.remove('dragging');
+      box.removeEventListener('pointermove', onMove);
+      box.removeEventListener('pointerup', onUp);
+    }
+    box.addEventListener('pointermove', onMove);
+    box.addEventListener('pointerup', onUp);
+  }
+
+  function showTablePopover(t, todaysReservations) {
+    const el = $('table-popover');
+    if (!todaysReservations.length) {
+      el.innerHTML = `<div class="table-popover"><h3>${escapeHtml(t.name)} — seats ${t.capacity}</h3><p style="color:var(--ink-soft); margin:0;">No reservations at this table on this date.</p></div>`;
+      return;
+    }
+    const rows = todaysReservations.map((r) => `
+      <div class="row">
+        <span>${formatTime(r.time)} — ${escapeHtml(r.guest_name)} (${r.party_size})</span>
+        <span class="pill ${r.status}">${r.status.replace('_', ' ')}</span>
+      </div>`).join('');
+    el.innerHTML = `<div class="table-popover"><h3>${escapeHtml(t.name)} — seats ${t.capacity}</h3>${rows}</div>`;
+  }
+
+  $('edit-layout-btn').addEventListener('click', () => {
+    editMode = !editMode;
+    $('edit-layout-btn').textContent = editMode ? 'Cancel editing' : 'Edit layout';
+    $('save-layout-btn').hidden = !editMode;
+    $('add-table-wrap').hidden = !editMode;
+    $('table-popover').innerHTML = '';
+    if (!editMode) dirtyPositions = {};
+    renderFloorplan();
+  });
+
+  $('save-layout-btn').addEventListener('click', async () => {
+    const ids = Object.keys(dirtyPositions);
+    for (const id of ids) {
+      const { x, y } = dirtyPositions[id];
+      await fetch(`/api/tables/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pos_x: x, pos_y: y }),
+      });
+    }
+    editMode = false;
+    $('edit-layout-btn').textContent = 'Edit layout';
+    $('save-layout-btn').hidden = true;
+    $('add-table-wrap').hidden = true;
+    load();
+  });
+
+  $('add-table-btn').addEventListener('click', async () => {
+    const name = $('new-table-name').value.trim();
+    const capacity = Number($('new-table-capacity').value);
+    const section = $('new-table-section').value;
+    if (!name || !capacity) return;
+    await fetch('/api/tables', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, capacity, section }),
+    });
+    $('new-table-name').value = '';
+    $('new-table-capacity').value = '';
+    load();
+  });
+
+  // --- Reservation list ---
+
+  function tableOptions(selectedId) {
+    const bySection = { Main: [], Patio: [], Other: [] };
+    for (const t of tables) {
+      (bySection[t.section] || bySection.Other).push(t);
+    }
+    let html = '';
+    for (const [section, list] of Object.entries(bySection)) {
+      if (!list.length) continue;
+      html += `<optgroup label="${section}">`;
+      for (const t of list) {
+        html += `<option value="${t.id}" ${t.id === selectedId ? 'selected' : ''}>${escapeHtml(t.name)} (seats ${t.capacity})</option>`;
+      }
+      html += '</optgroup>';
+    }
+    return html;
+  }
+
+  function renderList() {
     const tbody = $('tbody');
     tbody.innerHTML = '';
-    const active = rows.filter((r) => r.status !== 'cancelled');
-    $('stat').textContent = `${active.length} reservation${active.length === 1 ? '' : 's'} · ${active.reduce((s, r) => s + r.party_size, 0)} covers`;
 
-    if (!rows.length) {
+    if (!reservations.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty">No reservations for this date.</td></tr>';
       return;
     }
 
-    for (const r of rows) {
+    for (const r of reservations) {
       const tr = document.createElement('tr');
+      const canReassign = r.status !== 'cancelled' && r.status !== 'completed';
       tr.innerHTML = `
         <td class="time">${formatTime(r.time)}</td>
         <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(r.phone || r.email || '')}</span></td>
         <td>${r.party_size}</td>
-        <td>${escapeHtml(r.table_name || '—')}</td>
+        <td>${canReassign
+          ? `<select data-reassign="${r.id}" data-party="${r.party_size}">${tableOptions(r.table_id)}</select>`
+          : escapeHtml(r.table_name || '—')}</td>
         <td class="notes">${escapeHtml(r.notes || '')}</td>
         <td><span class="pill ${r.status}">${r.status.replace('_', ' ')}</span></td>
         <td class="actions">${actionButtons(r)}</td>
@@ -116,6 +346,9 @@
 
     tbody.querySelectorAll('button[data-action]').forEach((btn) => {
       btn.addEventListener('click', () => updateStatus(btn.dataset.id, btn.dataset.action));
+    });
+    tbody.querySelectorAll('select[data-reassign]').forEach((sel) => {
+      sel.addEventListener('change', () => reassignTable(sel));
     });
   }
 
@@ -136,6 +369,23 @@
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
+    });
+    load();
+  }
+
+  async function reassignTable(sel) {
+    const id = sel.dataset.reassign;
+    const party = Number(sel.dataset.party);
+    const newTableId = Number(sel.value);
+    const table = tables.find((t) => t.id === newTableId);
+    if (table && table.capacity < party) {
+      const ok = confirm(`${table.name} seats ${table.capacity}, but this party is ${party}. Assign anyway?`);
+      if (!ok) { renderList(); return; }
+    }
+    await fetch(`/api/reservations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ table_id: newTableId }),
     });
     load();
   }
