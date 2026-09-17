@@ -15,7 +15,7 @@ run_worker_first = true
 [[d1_databases]]
 binding = "DB"
 database_name = "lj-reservations"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"   # from `wrangler d1 create lj-reservations`
+database_id = "b39dba9f-02b4-4a19-8761-51b39cdd9c0d"   # from `wrangler d1 create lj-reservations`
 
 # Secrets (set with `wrangler secret put NAME` — never committed here):
 #   SQUARE_ACCESS_TOKEN
