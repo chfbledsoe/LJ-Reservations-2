@@ -1,0 +1,25 @@
+name = "lj-reservations"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+# IMPORTANT: run_worker_first = true is required for security here, not just routing.
+# By default Cloudflare serves a matching static file (like /admin.html) directly and
+# never invokes the Worker at all — which would skip the Basic Auth check in src/index.js
+# entirely. This was caught by testing: without this setting, /admin.html was reachable
+# with no credentials. Do not remove this line.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lj-reservations"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"   # from `wrangler d1 create lj-reservations`
+
+# Secrets (set with `wrangler secret put NAME` — never committed here):
+#   SQUARE_ACCESS_TOKEN
+#   SQUARE_LOCATION_ID
+#   SQUARE_ENVIRONMENT   ("sandbox" while testing, "production" when live)
+#   ADMIN_USERNAME
+#   ADMIN_PASSWORD

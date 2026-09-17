@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reservations — Staff</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --bg:#F6F4EC; --surface:#FFFFFF; --surface-2:#EFEBDD; --ink:#2A2820; --ink-soft:#5B5748;
+    --line:#DCD5C1; --accent:#3C5A45; --accent-soft:#E4EBE2; --amber:#A97A2E; --amber-soft:#F3E6CC;
+    --danger:#A9642E; --danger-soft:#F3E1CC;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans", system-ui, sans-serif; padding: 20px 16px 60px;
+  }
+  .wrap{ max-width: 920px; margin: 0 auto; }
+  h1{ font-family:"Spectral", serif; font-size: 1.5rem; margin: 0 0 16px; }
+  .toolbar{ display:flex; gap: 10px; align-items:center; flex-wrap: wrap; margin-bottom: 18px; }
+  input[type=date]{
+    padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font-family: inherit;
+    background: var(--surface); color: var(--ink);
+  }
+  .stat{
+    font-family:"IBM Plex Mono", monospace; font-size: 0.8rem; color: var(--ink-soft);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  }
+  button{ font-family: inherit; cursor:pointer; border-radius: 7px; border: 1px solid var(--line); background: var(--surface); padding: 7px 11px; font-size: 0.82rem; }
+  button:hover{ background: var(--surface-2); }
+  button.primary{ background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.warn{ background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
+  button.danger{ background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+  table{ width:100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow:hidden; }
+  thead th{
+    text-align:left; font-family:"IBM Plex Mono", monospace; font-size: 0.68rem; letter-spacing:0.05em;
+    text-transform:uppercase; color: var(--ink-soft); background: var(--surface-2);
+    padding: 9px 10px; border-bottom: 1px solid var(--line);
+  }
+  tbody td{ padding: 10px; border-bottom: 1px solid var(--line); font-size: 0.88rem; vertical-align: middle; }
+  tbody tr:last-child td{ border-bottom: none; }
+  .time{ font-family:"IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pill{
+    display:inline-block; font-size: 0.72rem; padding: 2px 9px; border-radius: 999px;
+    font-family:"IBM Plex Mono", monospace; text-transform: capitalize;
+  }
+  .pill.confirmed{ background: var(--accent-soft); color: var(--accent); }
+  .pill.seated{ background: var(--amber-soft); color: var(--amber); }
+  .pill.completed{ background: var(--surface-2); color: var(--ink-soft); }
+  .pill.cancelled, .pill.no_show{ background: var(--danger-soft); color: var(--danger); }
+  .actions{ display:flex; gap: 6px; flex-wrap: wrap; }
+  .empty{ padding: 30px; text-align:center; color: var(--ink-soft); }
+  .notes{ font-size: 0.8rem; color: var(--ink-soft); max-width: 220px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Reservations</h1>
+  <div class="toolbar">
+    <input type="date" id="date">
+    <button id="refresh">Refresh</button>
+    <span class="stat" id="stat"></span>
+  </div>
+
+  <div id="table-wrap">
+    <table id="tbl">
+      <thead>
+        <tr><th>Time</th><th>Guest</th><th>Party</th><th>Table</th><th>Notes</th><th>Status</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const dateInput = $('date');
+  dateInput.value = new Date().toISOString().slice(0, 10);
+
+  async function load() {
+    const date = dateInput.value;
+    const res = await fetch(`/api/reservations?date=${date}`);
+    if (res.status === 401) {
+      document.body.innerHTML = '<p style="padding:40px;font-family:sans-serif">Sign in required — reload the page and enter the staff username/password.</p>';
+      return;
+    }
+    const data = await res.json();
+    render(data.reservations || []);
+  }
+
+  function render(rows) {
+    const tbody = $('tbody');
+    tbody.innerHTML = '';
+    const active = rows.filter((r) => r.status !== 'cancelled');
+    $('stat').textContent = `${active.length} reservation${active.length === 1 ? '' : 's'} · ${active.reduce((s, r) => s + r.party_size, 0)} covers`;
+
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">No reservations for this date.</td></tr>';
+      return;
+    }
+
+    for (const r of rows) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="time">${formatTime(r.time)}</td>
+        <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(r.phone || r.email || '')}</span></td>
+        <td>${r.party_size}</td>
+        <td>${escapeHtml(r.table_name || '—')}</td>
+        <td class="notes">${escapeHtml(r.notes || '')}</td>
+        <td><span class="pill ${r.status}">${r.status.replace('_', ' ')}</span></td>
+        <td class="actions">${actionButtons(r)}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+
+    tbody.querySelectorAll('button[data-action]').forEach((btn) => {
+      btn.addEventListener('click', () => updateStatus(btn.dataset.id, btn.dataset.action));
+    });
+  }
+
+  function actionButtons(r) {
+    if (r.status === 'confirmed') {
+      return `<button class="primary" data-action="seated" data-id="${r.id}">Seat</button>
+              <button class="danger" data-action="no_show" data-id="${r.id}">No-show</button>
+              <button data-action="cancelled" data-id="${r.id}">Cancel</button>`;
+    }
+    if (r.status === 'seated') {
+      return `<button class="warn" data-action="completed" data-id="${r.id}">Complete</button>`;
+    }
+    return '';
+  }
+
+  async function updateStatus(id, status) {
+    await fetch(`/api/reservations/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    load();
+  }
+
+  function formatTime(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = ((h + 11) % 12) + 1;
+    return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  $('refresh').addEventListener('click', load);
+  dateInput.addEventListener('change', load);
+  load();
+</script>
+</body>
+</html>
