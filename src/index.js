@@ -4,6 +4,7 @@ import {
 import {
   getTables, getServicePeriods, getBlackoutDates, getReservationsForDate,
   insertReservation, getReservation, updateReservationStatus, cancelReservation,
+  insertTable, updateTable, updateReservationTable,
 } from './db.js';
 import { upsertSquareCustomer, createSquareOrder } from './square.js';
 
@@ -83,7 +84,7 @@ async function handleCreateReservation(request, env) {
 
   const id = await insertReservation(env, {
     date, time, partySize, guestName, phone, email, notes,
-    tableId: check.table.id, squareCustomerId,
+    tableId: check.table.id, turnTimeMinutes: check.turnTimeMinutes, squareCustomerId,
   });
 
   return json({
@@ -106,7 +107,27 @@ async function handleListReservations(request, env) {
 
 async function handleUpdateReservation(request, env, id) {
   const body = await request.json().catch(() => null);
-  if (!body?.status) return json({ error: 'status is required' }, { status: 400 });
+  if (!body || (!body.status && body.table_id === undefined)) {
+    return json({ error: 'status or table_id is required' }, { status: 400 });
+  }
+
+  const existing = await getReservation(env, id);
+  if (!existing) return json({ error: 'not found' }, { status: 404 });
+
+  // Reassigning to a different table — a staff override from the floor plan / reservation
+  // list, independent of status. No overlap re-check here: staff can see the floor plan's
+  // occupancy for themselves, and this is a deliberate manual override.
+  if (body.table_id !== undefined) {
+    const tables = await getTables(env);
+    const table = tables.find((t) => t.id === body.table_id);
+    if (!table) return json({ error: 'table_id does not match an active table' }, { status: 400 });
+    await updateReservationTable(env, id, body.table_id);
+  }
+
+  if (!body.status) {
+    const updated = await getReservation(env, id);
+    return json({ id, table_id: updated.table_id });
+  }
 
   const allowed = ['confirmed', 'seated', 'completed', 'cancelled', 'no_show'];
   if (!allowed.includes(body.status)) {
@@ -121,7 +142,6 @@ async function handleUpdateReservation(request, env, id) {
   let squareOrderId;
   if (body.status === 'seated') {
     const reservation = await getReservation(env, id);
-    if (!reservation) return json({ error: 'not found' }, { status: 404 });
     try {
       squareOrderId = await createSquareOrder(env, {
         referenceId: id,
@@ -135,6 +155,40 @@ async function handleUpdateReservation(request, env, id) {
 
   await updateReservationStatus(env, id, body.status, { squareOrderId });
   return json({ id, status: body.status, square_order_id: squareOrderId || null });
+}
+
+async function handleListTables(request, env) {
+  const tables = await getTables(env);
+  return json({ tables });
+}
+
+async function handleCreateTable(request, env) {
+  const body = await request.json().catch(() => null);
+  const { name, capacity, section } = body || {};
+  if (!name || !capacity || capacity < 1) {
+    return json({ error: 'name and a positive capacity are required' }, { status: 400 });
+  }
+  const id = await insertTable(env, { name, capacity, section });
+  return json({ id, name, capacity, section: section || null, pos_x: 40, pos_y: 40 }, { status: 201 });
+}
+
+// Only these fields may ever be written via this endpoint — never pass a request body
+// straight through to updateTable, which builds raw SQL from its keys.
+const EDITABLE_TABLE_FIELDS = ['name', 'capacity', 'section', 'active', 'pos_x', 'pos_y'];
+
+async function handleUpdateTable(request, env, id) {
+  const body = await request.json().catch(() => null);
+  if (!body) return json({ error: 'invalid JSON body' }, { status: 400 });
+
+  const fields = {};
+  for (const key of EDITABLE_TABLE_FIELDS) {
+    if (body[key] !== undefined) fields[key] = body[key];
+  }
+  if (!Object.keys(fields).length) {
+    return json({ error: `no editable fields provided (allowed: ${EDITABLE_TABLE_FIELDS.join(', ')})` }, { status: 400 });
+  }
+  await updateTable(env, id, fields);
+  return json({ id, ...fields });
 }
 
 export default {
@@ -159,6 +213,23 @@ export default {
         const authFail = requireBasicAuth(request, env);
         if (authFail) return authFail;
         return await handleUpdateReservation(request, env, Number(patchMatch[1]));
+      }
+
+      if (pathname === '/api/tables' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleListTables(request, env);
+      }
+      if (pathname === '/api/tables' && request.method === 'POST') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleCreateTable(request, env);
+      }
+      const tablePatchMatch = pathname.match(/^\/api\/tables\/(\d+)$/);
+      if (tablePatchMatch && request.method === 'PATCH') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleUpdateTable(request, env, Number(tablePatchMatch[1]));
       }
 
       if (pathname === '/admin' || pathname === '/admin.html') {
