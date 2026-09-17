@@ -6,6 +6,25 @@ export async function getTables(env) {
   return results;
 }
 
+export async function insertTable(env, { name, capacity, section }) {
+  const res = await env.DB.prepare(
+    'INSERT INTO tables (name, capacity, section, pos_x, pos_y) VALUES (?, ?, ?, 40, 40)',
+  ).bind(name, capacity, section || null).run();
+  return res.meta.last_row_id;
+}
+
+export async function updateTable(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  for (const [col, val] of Object.entries(fields)) {
+    sets.push(`${col} = ?`);
+    binds.push(val);
+  }
+  if (!sets.length) return;
+  binds.push(id);
+  await env.DB.prepare(`UPDATE tables SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+}
+
 export async function getServicePeriods(env) {
   const { results } = await env.DB.prepare('SELECT * FROM service_periods WHERE active = 1').all();
   return results;
@@ -26,10 +45,10 @@ export async function getReservationsForDate(env, date) {
 export async function insertReservation(env, r) {
   const res = await env.DB.prepare(
     `INSERT INTO reservations
-      (date, time, party_size, guest_name, phone, email, notes, table_id, status, square_customer_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+      (date, time, party_size, guest_name, phone, email, notes, table_id, turn_time_minutes, status, square_customer_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
   ).bind(r.date, r.time, r.partySize, r.guestName, r.phone || null, r.email || null,
-    r.notes || null, r.tableId, r.squareCustomerId || null).run();
+    r.notes || null, r.tableId, r.turnTimeMinutes || null, r.squareCustomerId || null).run();
   return res.meta.last_row_id;
 }
 
@@ -46,6 +65,12 @@ export async function updateReservationStatus(env, id, status, extra = {}) {
   }
   binds.push(id);
   await env.DB.prepare(`UPDATE reservations SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+}
+
+export async function updateReservationTable(env, id, tableId) {
+  await env.DB.prepare(
+    `UPDATE reservations SET table_id = ?, updated_at = datetime('now') WHERE id = ?`,
+  ).bind(tableId, id).run();
 }
 
 export async function cancelReservation(env, id) {
