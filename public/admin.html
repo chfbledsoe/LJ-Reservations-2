@@ -55,6 +55,9 @@
   .table-box.occupied{ border-style: solid; box-shadow: 0 0 0 3px var(--amber-soft); }
   .table-box .cap{ font-weight:400; color: var(--ink-soft); font-size: 0.68rem; }
   .table-box.dragging{ opacity: 0.7; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 5; }
+  .table-box.drop-target{ outline: 3px dashed var(--accent); outline-offset: 2px; }
+  .res-row{ cursor: grab; }
+  .res-row.drag-source{ opacity: 0.4; }
   .legend{ display:flex; gap:14px; flex-wrap:wrap; margin-top:8px; font-size:0.76rem; color:var(--ink-soft); align-items:center; }
   .swatch{ display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:5px; vertical-align:-1px; }
 
@@ -99,6 +102,10 @@
   <h1>Reservations</h1>
   <div class="toolbar">
     <input type="date" id="date">
+    <label style="font-size:0.8rem; color:var(--ink-soft); display:flex; align-items:center; gap:6px;">
+      Floor plan time
+      <input type="time" id="floor-time" step="900">
+    </label>
     <button id="refresh">Refresh</button>
     <span class="stat" id="stat"></span>
   </div>
@@ -115,8 +122,8 @@
     <div class="legend">
       <span><span class="swatch" style="background:var(--accent-soft); border:1.5px solid var(--accent);"></span>Main dining room</span>
       <span><span class="swatch" style="background:var(--patio-soft); border:1.5px solid var(--patio);"></span>Patio</span>
-      <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Has a reservation this date</span>
-      <span style="margin-left:auto; color:var(--ink-soft);">In edit mode: drag boxes to arrange, then Save layout.</span>
+      <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Occupied at the time above</span>
+      <span style="margin-left:auto; color:var(--ink-soft);">Drag a reservation from the list onto a table to assign it. In edit mode, drag boxes to arrange, or click one to rename/resize/remove — then Save layout.</span>
     </div>
     <div id="add-table-wrap" hidden>
       <div class="add-table-row">
@@ -146,12 +153,29 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const dateInput = $('date');
+  const floorTimeInput = $('floor-time');
   dateInput.value = new Date().toISOString().slice(0, 10);
+
+  // Default the floor-plan clock to "now" (rounded to the nearest 15 min) when looking at
+  // today; otherwise default to the start of dinner service, since a future date has no
+  // meaningful "now".
+  (function setDefaultFloorTime() {
+    const now = new Date();
+    const rounded = new Date(now);
+    rounded.setMinutes(Math.round(now.getMinutes() / 15) * 15, 0, 0);
+    floorTimeInput.value = rounded.toTimeString().slice(0, 5);
+  })();
 
   let tables = [];
   let reservations = [];
   let editMode = false;
   let dirtyPositions = {}; // tableId -> {pos_x, pos_y}, not yet saved
+  let draggedReservationId = null; // set during a native drag of a reservation row
+
+  function timeToMinutes(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    return h * 60 + m;
+  }
 
   async function load() {
     const date = dateInput.value;
@@ -173,6 +197,8 @@
     renderList();
   }
 
+  floorTimeInput.addEventListener('change', renderFloorplan);
+
   function renderStat() {
     const active = reservations.filter((r) => r.status !== 'cancelled');
     $('stat').textContent = `${active.length} reservation${active.length === 1 ? '' : 's'} · ${active.reduce((s, r) => s + r.party_size, 0)} covers`;
@@ -192,16 +218,27 @@
     return { x: 30 + col * 140, y: 30 + row * 100 };
   }
 
+  // Is `res` occupying its table at `atMinutes`? Uses its saved turn time, falling back to
+  // 90 minutes for reservations booked before that column existed.
+  function occupiesAt(res, atMinutes) {
+    const start = timeToMinutes(res.time);
+    const end = start + (res.turn_time_minutes || 90);
+    return atMinutes >= start && atMinutes < end;
+  }
+
   function renderFloorplan() {
     const el = $('floorplan');
     el.innerHTML = '';
+    const atMinutes = timeToMinutes(floorTimeInput.value || '18:00');
+
     tables.forEach((t, i) => {
       const pos = dirtyPositions[t.id] || (t.pos_x != null ? { x: t.pos_x, y: t.pos_y } : fallbackPosition(i));
       const [w, h] = boxSize(t.capacity);
       const todaysReservations = reservations.filter((r) => r.table_id === t.id && r.status !== 'cancelled');
+      const occupiedNow = todaysReservations.some((r) => occupiesAt(r, atMinutes));
 
       const box = document.createElement('div');
-      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + (todaysReservations.length ? ' occupied' : '');
+      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + (occupiedNow ? ' occupied' : '');
       box.style.left = pos.x + 'px';
       box.style.top = pos.y + 'px';
       box.style.width = w + 'px';
@@ -213,6 +250,20 @@
         box.addEventListener('pointerdown', (e) => startDrag(e, box, t.id));
       } else {
         box.addEventListener('click', () => showTablePopover(t, todaysReservations));
+        box.addEventListener('dragover', (e) => {
+          if (draggedReservationId == null) return;
+          e.preventDefault();
+          box.classList.add('drop-target');
+        });
+        box.addEventListener('dragleave', () => box.classList.remove('drop-target'));
+        box.addEventListener('drop', (e) => {
+          e.preventDefault();
+          box.classList.remove('drop-target');
+          if (draggedReservationId == null) return;
+          const party = Number(e.dataTransfer.getData('text/party-size') || 0);
+          reassignTableTo(draggedReservationId, t.id, party);
+          draggedReservationId = null;
+        });
       }
       el.appendChild(box);
     });
@@ -221,13 +272,14 @@
   function startDrag(e, box, tableId) {
     e.preventDefault();
     box.setPointerCapture(e.pointerId);
-    box.classList.add('dragging');
-    const floorRect = $('floorplan').getBoundingClientRect();
     const startLeft = box.offsetLeft, startTop = box.offsetTop;
     const startX = e.clientX, startY = e.clientY;
+    let moved = false; // only counts as a drag past a small threshold, so a plain click opens the editor
 
     function onMove(ev) {
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      if (!moved) { moved = true; box.classList.add('dragging'); }
       const newX = Math.max(0, startLeft + dx);
       const newY = Math.max(0, startTop + dy);
       box.style.left = newX + 'px';
@@ -238,9 +290,64 @@
       box.classList.remove('dragging');
       box.removeEventListener('pointermove', onMove);
       box.removeEventListener('pointerup', onUp);
+      if (!moved) openTableEditor(tableId);
     }
     box.addEventListener('pointermove', onMove);
     box.addEventListener('pointerup', onUp);
+  }
+
+  // Edit mode: clicking a box (rather than dragging it) opens a rename/resize/remove form
+  // in the same panel used to show a table's reservations in view mode.
+  function openTableEditor(tableId) {
+    const t = tables.find((tb) => tb.id === tableId);
+    if (!t) return;
+    const el = $('table-popover');
+    el.innerHTML = `
+      <div class="table-popover">
+        <h3>Edit ${escapeHtml(t.name)}</h3>
+        <div class="add-table-row">
+          <input type="text" id="edit-table-name" value="${escapeHtml(t.name)}" placeholder="Name">
+          <input type="number" id="edit-table-capacity" value="${t.capacity}" min="1" placeholder="Seats">
+          <select id="edit-table-section">
+            <option value="Main" ${t.section === 'Main' ? 'selected' : ''}>Main</option>
+            <option value="Patio" ${t.section === 'Patio' ? 'selected' : ''}>Patio</option>
+          </select>
+          <button id="edit-table-save" class="primary">Save</button>
+          <button id="edit-table-remove" class="danger">Remove table</button>
+          <button id="edit-table-cancel">Cancel</button>
+        </div>
+      </div>`;
+
+    $('edit-table-save').addEventListener('click', async () => {
+      const name = $('edit-table-name').value.trim();
+      const capacity = Number($('edit-table-capacity').value);
+      const section = $('edit-table-section').value;
+      if (!name || !capacity) return;
+      await fetch(`/api/tables/${tableId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, capacity, section }),
+      });
+      el.innerHTML = '';
+      load();
+    });
+
+    $('edit-table-remove').addEventListener('click', async () => {
+      const todaysCount = reservations.filter((r) => r.table_id === tableId && r.status !== 'cancelled').length;
+      const warning = todaysCount
+        ? `${t.name} has ${todaysCount} reservation${todaysCount === 1 ? '' : 's'} today. Remove it anyway? Those bookings will keep their time and party size but lose their table assignment.`
+        : `Remove ${t.name} from the floor plan? You can always add it back later.`;
+      if (!confirm(warning)) return;
+      await fetch(`/api/tables/${tableId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: 0 }),
+      });
+      el.innerHTML = '';
+      load();
+    });
+
+    $('edit-table-cancel').addEventListener('click', () => { el.innerHTML = ''; });
   }
 
   function showTablePopover(t, todaysReservations) {
@@ -330,6 +437,13 @@
     for (const r of reservations) {
       const tr = document.createElement('tr');
       const canReassign = r.status !== 'cancelled' && r.status !== 'completed';
+      tr.className = 'res-row';
+      if (canReassign) {
+        tr.draggable = true;
+        tr.dataset.id = r.id;
+        tr.dataset.party = r.party_size;
+        tr.title = 'Drag onto a table in the floor plan to assign it';
+      }
       tr.innerHTML = `
         <td class="time">${formatTime(r.time)}</td>
         <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(r.phone || r.email || '')}</span></td>
@@ -348,7 +462,21 @@
       btn.addEventListener('click', () => updateStatus(btn.dataset.id, btn.dataset.action));
     });
     tbody.querySelectorAll('select[data-reassign]').forEach((sel) => {
-      sel.addEventListener('change', () => reassignTable(sel));
+      sel.addEventListener('change', () => {
+        reassignTableTo(sel.dataset.reassign, Number(sel.value), Number(sel.dataset.party));
+      });
+    });
+    tbody.querySelectorAll('tr.res-row[draggable="true"]').forEach((row) => {
+      row.addEventListener('dragstart', (e) => {
+        draggedReservationId = row.dataset.id;
+        e.dataTransfer.setData('text/party-size', row.dataset.party);
+        e.dataTransfer.effectAllowed = 'move';
+        row.classList.add('drag-source');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('drag-source');
+        draggedReservationId = null;
+      });
     });
   }
 
@@ -373,12 +501,12 @@
     load();
   }
 
-  async function reassignTable(sel) {
-    const id = sel.dataset.reassign;
-    const party = Number(sel.dataset.party);
-    const newTableId = Number(sel.value);
+  // Shared by both the reservation-list dropdown and dropping a reservation onto a table
+  // box in the floor plan.
+  async function reassignTableTo(id, newTableId, party) {
     const table = tables.find((t) => t.id === newTableId);
-    if (table && table.capacity < party) {
+    if (!table) return;
+    if (table.capacity < party) {
       const ok = confirm(`${table.name} seats ${table.capacity}, but this party is ${party}. Assign anyway?`);
       if (!ok) { renderList(); return; }
     }
