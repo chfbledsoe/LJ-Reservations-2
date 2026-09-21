@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reserve a Table — Lake Junaluska Dining</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<title>Reserve a Table — Lakeside Bistro</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Work+Sans:wght@400;500;600&display=swap">
 <style>
   :root{
     --bg:#F6F4EC; --surface:#FFFFFF; --ink:#2A2820; --ink-soft:#5B5748;
@@ -13,11 +13,11 @@
   *{ box-sizing:border-box; }
   body{
     margin:0; background:var(--bg); color:var(--ink);
-    font-family:"IBM Plex Sans", system-ui, sans-serif; line-height:1.5;
+    font-family:"Work Sans", system-ui, sans-serif; line-height:1.5;
     padding: 28px 16px 60px;
   }
   .wrap{ max-width: 480px; margin: 0 auto; }
-  h1{ font-family:"Spectral", Georgia, serif; font-size: 1.7rem; margin: 0 0 4px; }
+  h1{ font-family:"EB Garamond", Georgia, serif; font-weight: 600; font-size: 1.9rem; margin: 0 0 4px; }
   p.sub{ color: var(--ink-soft); margin: 0 0 24px; }
   label{ display:block; font-size: 0.82rem; font-weight: 600; margin: 16px 0 6px; }
   input, select, textarea{
@@ -44,7 +44,7 @@
   .msg{ font-size: 0.88rem; color: var(--ink-soft); margin-top: 10px; }
   .msg.error{ color: var(--danger); }
   .card{ background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-top: 18px; }
-  .confirm h2{ font-family:"Spectral", serif; color: var(--accent); margin-top:0; }
+  .confirm h2{ font-family:"EB Garamond", serif; font-weight:600; font-size:1.3rem; color: var(--accent); margin-top:0; }
   .confirm dl{ display:grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 0.92rem; }
   .confirm dt{ color: var(--ink-soft); }
   .confirm dd{ margin:0; font-weight: 600; }
@@ -55,7 +55,7 @@
 <div class="wrap">
 
   <h1>Reserve a Table</h1>
-  <p class="sub">Lake Junaluska Dining Room</p>
+  <p class="sub">Lakeside Bistro</p>
 
   <div id="step-search">
     <label for="date">Date</label>
@@ -83,7 +83,7 @@
   </div>
 
   <form id="step-details" class="card" hidden>
-    <h2 style="margin-top:0; font-family:'Spectral',serif; font-size:1.1rem;">Your details</h2>
+    <h2 style="margin-top:0; font-family:'EB Garamond',serif; font-weight:600; font-size:1.25rem;">Your details</h2>
     <label for="name">Name</label>
     <input type="text" id="name" required autocomplete="name">
 
