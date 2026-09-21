@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Reserve a Table — Lakeside Bistro</title>
+<title>Lakeside Bistro — Reserve a Table</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Work+Sans:wght@400;500;600&display=swap">
 <style>
   :root{
@@ -17,7 +17,11 @@
     padding: 28px 16px 60px;
   }
   .wrap{ max-width: 480px; margin: 0 auto; }
-  h1{ font-family:"EB Garamond", Georgia, serif; font-weight: 600; font-size: 1.9rem; margin: 0 0 4px; }
+  p.eyebrow{
+    font-family:"Work Sans", sans-serif; font-size: 0.8rem; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px;
+  }
+  h1{ font-family:"EB Garamond", Georgia, serif; font-weight: 600; font-size: 2.6rem; line-height:1.08; margin: 0 0 6px; }
   p.sub{ color: var(--ink-soft); margin: 0 0 24px; }
   label{ display:block; font-size: 0.82rem; font-weight: 600; margin: 16px 0 6px; }
   input, select, textarea{
@@ -54,8 +58,9 @@
 <body>
 <div class="wrap">
 
-  <h1>Reserve a Table</h1>
-  <p class="sub">Lakeside Bistro</p>
+  <p class="eyebrow">Reserve a Table</p>
+  <h1>Lakeside Bistro</h1>
+  <p class="sub">Lake Junaluska, NC</p>
 
   <div id="step-search">
     <label for="date">Date</label>
