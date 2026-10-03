@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lakeside Bistro — Reserve a Table</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,500;0,600;0,700;1,500&family=Work+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#F6F4EC; --surface:#FFFFFF; --ink:#2A2820; --ink-soft:#5B5748;
+    --line:#DCD5C1; --accent:#3C5A45; --accent-soft:#E4EBE2; --danger:#A9642E;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Work Sans", system-ui, sans-serif; line-height:1.5;
+    padding: 28px 16px 60px;
+  }
+  .wrap{ max-width: 480px; margin: 0 auto; }
+  p.eyebrow{
+    font-family:"Work Sans", sans-serif; font-size: 0.8rem; font-weight: 600;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px;
+  }
+  h1{ font-family:"EB Garamond", Georgia, serif; font-weight: 600; font-size: 2.6rem; line-height:1.08; margin: 0 0 6px; }
+  p.sub{ color: var(--ink-soft); margin: 0 0 24px; }
+  label{ display:block; font-size: 0.82rem; font-weight: 600; margin: 16px 0 6px; }
+  input, select, textarea{
+    width:100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px;
+    font-family: inherit; font-size: 0.95rem; background: var(--surface); color: var(--ink);
+  }
+  textarea{ resize: vertical; min-height: 64px; }
+  .row{ display:flex; gap: 12px; }
+  .row > div{ flex: 1; }
+  button{
+    font-family: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer;
+    border-radius: 8px; border: none; padding: 12px 18px;
+  }
+  .btn-primary{ background: var(--accent); color: #fff; width: 100%; margin-top: 22px; }
+  .btn-primary:disabled{ opacity: 0.5; cursor: not-allowed; }
+  .btn-secondary{ background: transparent; color: var(--accent); text-decoration: underline; padding: 8px 0; }
+  .slots{ display:flex; flex-wrap:wrap; gap: 8px; margin-top: 14px; }
+  .slot{
+    padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line);
+    background: var(--surface); font-size: 0.88rem; cursor: pointer;
+  }
+  .slot.selected{ background: var(--accent); border-color: var(--accent); color: #fff; }
+  .slot[disabled]{ opacity: 0.35; text-decoration: line-through; cursor: not-allowed; }
+  .msg{ font-size: 0.88rem; color: var(--ink-soft); margin-top: 10px; }
+  .msg.error{ color: var(--danger); }
+  .card{ background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-top: 18px; }
+  .confirm h2{ font-family:"EB Garamond", serif; font-weight:600; font-size:1.3rem; color: var(--accent); margin-top:0; }
+  .confirm dl{ display:grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 0.92rem; }
+  .confirm dt{ color: var(--ink-soft); }
+  .confirm dd{ margin:0; font-weight: 600; }
+  [hidden]{ display:none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Reserve a Table</p>
+  <h1>Lakeside Bistro</h1>
+  <p class="sub">Lake Junaluska, NC</p>
+
+  <div id="step-search">
+    <label for="date">Date</label>
+    <input type="date" id="date">
+
+    <label for="party">Party size</label>
+    <select id="party">
+      <option value="1">1 guest</option>
+      <option value="2" selected>2 guests</option>
+      <option value="3">3 guests</option>
+      <option value="4">4 guests</option>
+      <option value="5">5 guests</option>
+      <option value="6">6 guests</option>
+      <option value="7">7 guests</option>
+      <option value="8">8 guests</option>
+    </select>
+
+    <button class="btn-primary" id="find-btn">Find a table</button>
+    <div class="msg" id="search-msg"></div>
+
+    <div id="slots-wrap" hidden>
+      <label>Available times</label>
+      <div class="slots" id="slots"></div>
+    </div>
+  </div>
+
+  <form id="step-details" class="card" hidden>
+    <h2 style="margin-top:0; font-family:'EB Garamond',serif; font-weight:600; font-size:1.25rem;">Your details</h2>
+    <label for="name">Name</label>
+    <input type="text" id="name" required autocomplete="name">
+
+    <div class="row">
+      <div>
+        <label for="phone">Phone</label>
+        <input type="tel" id="phone" autocomplete="tel">
+      </div>
+      <div>
+        <label for="email">Email</label>
+        <input type="email" id="email" autocomplete="email">
+      </div>
+    </div>
+
+    <label for="notes">Notes (allergies, occasion, seating request)</label>
+    <textarea id="notes"></textarea>
+
+    <button type="submit" class="btn-primary">Confirm reservation</button>
+    <button type="button" class="btn-secondary" id="back-btn">&larr; Choose a different time</button>
+    <div class="msg error" id="submit-msg"></div>
+  </form>
+
+  <div id="step-confirm" class="card confirm" hidden>
+    <h2>You're booked</h2>
+    <dl>
+      <dt>Date</dt><dd id="c-date"></dd>
+      <dt>Time</dt><dd id="c-time"></dd>
+      <dt>Party</dt><dd id="c-party"></dd>
+      <dt>Table</dt><dd id="c-table"></dd>
+      <dt>Confirmation #</dt><dd id="c-id"></dd>
+    </dl>
+    <p class="msg">A member of our team may follow up if anything needs adjusting. See you soon!</p>
+  </div>
+
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const dateInput = $('date');
+  const today = new Date().toISOString().slice(0, 10);
+  dateInput.min = today;
+  dateInput.value = today;
+
+  let selectedTime = null;
+
+  $('find-btn').addEventListener('click', async () => {
+    const date = dateInput.value;
+    const party = $('party').value;
+    const msg = $('search-msg');
+    const slotsWrap = $('slots-wrap');
+    const slotsEl = $('slots');
+    msg.textContent = '';
+    msg.className = 'msg';
+    slotsWrap.hidden = true;
+    slotsEl.innerHTML = '';
+    $('step-details').hidden = true;
+    selectedTime = null;
+
+    if (!date) { msg.textContent = 'Pick a date first.'; msg.className = 'msg error'; return; }
+
+    $('find-btn').disabled = true;
+    try {
+      const res = await fetch(`/api/availability?date=${date}&party_size=${party}`);
+      const data = await res.json();
+
+      if (data.blackedOut) {
+        msg.textContent = "We're closed that day — please try another date.";
+        msg.className = 'msg error';
+        return;
+      }
+      if (!data.slots?.length) {
+        msg.textContent = 'No service that day — please try another date.';
+        msg.className = 'msg error';
+        return;
+      }
+      const open = data.slots.filter((s) => s.available);
+      if (!open.length) {
+        msg.textContent = "Fully booked for that date and party size — try a different date or a smaller party.";
+        msg.className = 'msg error';
+        return;
+      }
+
+      slotsWrap.hidden = false;
+      for (const s of data.slots) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'slot';
+        b.textContent = formatTime(s.time);
+        if (!s.available) { b.disabled = true; }
+        else {
+          b.addEventListener('click', () => {
+            document.querySelectorAll('.slot').forEach((el) => el.classList.remove('selected'));
+            b.classList.add('selected');
+            selectedTime = s.time;
+            $('step-details').hidden = false;
+            $('step-details').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          });
+        }
+        slotsEl.appendChild(b);
+      }
+    } catch (e) {
+      msg.textContent = 'Something went wrong checking availability. Please try again.';
+      msg.className = 'msg error';
+    } finally {
+      $('find-btn').disabled = false;
+    }
+  });
+
+  $('back-btn').addEventListener('click', () => {
+    $('step-details').hidden = true;
+    document.querySelectorAll('.slot').forEach((el) => el.classList.remove('selected'));
+    selectedTime = null;
+  });
+
+  $('step-details').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitMsg = $('submit-msg');
+    submitMsg.textContent = '';
+
+    const name = $('name').value.trim();
+    const phone = $('phone').value.trim();
+    const email = $('email').value.trim();
+    if (!name || (!phone && !email)) {
+      submitMsg.textContent = 'Please enter your name and a phone number or email.';
+      return;
+    }
+
+    const payload = {
+      date: dateInput.value,
+      time: selectedTime,
+      party_size: Number($('party').value),
+      guest_name: name,
+      phone, email,
+      notes: $('notes').value.trim(),
+    };
+
+    const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/reservations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        submitMsg.textContent = data.error === 'That time is no longer available'
+          ? 'Sorry — that time just got booked. Please pick another.'
+          : (data.error || 'Something went wrong. Please try again.');
+        btn.disabled = false;
+        return;
+      }
+      $('step-search').hidden = true;
+      $('step-details').hidden = true;
+      $('step-confirm').hidden = false;
+      $('c-date').textContent = payload.date;
+      $('c-time').textContent = formatTime(payload.time);
+      $('c-party').textContent = payload.party_size;
+      $('c-table').textContent = data.table;
+      $('c-id').textContent = 'LJ-' + data.id;
+    } catch (e) {
+      submitMsg.textContent = 'Something went wrong. Please try again.';
+      btn.disabled = false;
+    }
+  });
+
+  function formatTime(hhmm) {
+    const [h, m] = hhmm.split(':').map(Number);
+    const period = h >= 12 ? 'PM' : 'AM';
+    const h12 = ((h + 11) % 12) + 1;
+    return `${h12}:${String(m).padStart(2, '0')} ${period}`;
+  }
+</script>
+</body>
+</html>
