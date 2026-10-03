@@ -5,6 +5,8 @@ import {
   getTables, getServicePeriods, getBlackoutDates, getReservationsForDate,
   insertReservation, getReservation, updateReservationStatus, cancelReservation,
   insertTable, updateTable, updateReservationTable,
+  getAllServicePeriods, insertServicePeriod, updateServicePeriod,
+  insertBlackoutDate, deleteBlackoutDate,
 } from './db.js';
 import { upsertSquareCustomer, createSquareOrder } from './square.js';
 
@@ -191,6 +193,77 @@ async function handleUpdateTable(request, env, id) {
   return json({ id, ...fields });
 }
 
+async function handleListServicePeriods(request, env) {
+  const servicePeriods = await getAllServicePeriods(env);
+  return json({ service_periods: servicePeriods });
+}
+
+async function handleCreateServicePeriod(request, env) {
+  const body = await request.json().catch(() => null);
+  const {
+    name, days_of_week: daysOfWeek, start_time: startTime, end_time: endTime,
+    slot_interval_minutes: slotIntervalMinutes, turn_time_minutes: turnTimeMinutes,
+    covers_cap: coversCap,
+  } = body || {};
+  if (!name || !daysOfWeek || !startTime || !endTime || !coversCap) {
+    return json(
+      { error: 'name, days_of_week, start_time, end_time, and covers_cap are required' },
+      { status: 400 },
+    );
+  }
+  const id = await insertServicePeriod(env, {
+    name,
+    daysOfWeek,
+    startTime,
+    endTime,
+    slotIntervalMinutes: slotIntervalMinutes || 30,
+    turnTimeMinutes: turnTimeMinutes || 90,
+    coversCap,
+  });
+  return json({ id }, { status: 201 });
+}
+
+// Only these fields may ever be written via this endpoint — same guard as EDITABLE_TABLE_FIELDS.
+const EDITABLE_PERIOD_FIELDS = [
+  'name', 'days_of_week', 'start_time', 'end_time',
+  'slot_interval_minutes', 'turn_time_minutes', 'covers_cap', 'active',
+];
+
+async function handleUpdateServicePeriod(request, env, id) {
+  const body = await request.json().catch(() => null);
+  if (!body) return json({ error: 'invalid JSON body' }, { status: 400 });
+
+  const fields = {};
+  for (const key of EDITABLE_PERIOD_FIELDS) {
+    if (body[key] !== undefined) fields[key] = body[key];
+  }
+  if (!Object.keys(fields).length) {
+    return json({ error: `no editable fields provided (allowed: ${EDITABLE_PERIOD_FIELDS.join(', ')})` }, { status: 400 });
+  }
+  await updateServicePeriod(env, id, fields);
+  return json({ id, ...fields });
+}
+
+async function handleListBlackoutDates(request, env) {
+  const blackoutDates = await getBlackoutDates(env);
+  return json({ blackout_dates: blackoutDates });
+}
+
+async function handleCreateBlackoutDate(request, env) {
+  const body = await request.json().catch(() => null);
+  const { date, reason } = body || {};
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return json({ error: 'date is required in YYYY-MM-DD format' }, { status: 400 });
+  }
+  const id = await insertBlackoutDate(env, { date, reason });
+  return json({ id, date, reason: reason || null }, { status: 201 });
+}
+
+async function handleDeleteBlackoutDate(request, env, id) {
+  await deleteBlackoutDate(env, id);
+  return json({ id, deleted: true });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -230,6 +303,40 @@ export default {
         const authFail = requireBasicAuth(request, env);
         if (authFail) return authFail;
         return await handleUpdateTable(request, env, Number(tablePatchMatch[1]));
+      }
+
+      if (pathname === '/api/service-periods' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleListServicePeriods(request, env);
+      }
+      if (pathname === '/api/service-periods' && request.method === 'POST') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleCreateServicePeriod(request, env);
+      }
+      const periodPatchMatch = pathname.match(/^\/api\/service-periods\/(\d+)$/);
+      if (periodPatchMatch && request.method === 'PATCH') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleUpdateServicePeriod(request, env, Number(periodPatchMatch[1]));
+      }
+
+      if (pathname === '/api/blackout-dates' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleListBlackoutDates(request, env);
+      }
+      if (pathname === '/api/blackout-dates' && request.method === 'POST') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleCreateBlackoutDate(request, env);
+      }
+      const blackoutDeleteMatch = pathname.match(/^\/api\/blackout-dates\/(\d+)$/);
+      if (blackoutDeleteMatch && request.method === 'DELETE') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleDeleteBlackoutDate(request, env, Number(blackoutDeleteMatch[1]));
       }
 
       if (pathname === '/admin' || pathname === '/admin.html') {

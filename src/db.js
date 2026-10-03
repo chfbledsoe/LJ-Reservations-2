@@ -30,9 +30,49 @@ export async function getServicePeriods(env) {
   return results;
 }
 
+// Admin view — includes inactive periods too, so staff can see and re-enable them.
+export async function getAllServicePeriods(env) {
+  const { results } = await env.DB.prepare('SELECT * FROM service_periods ORDER BY id').all();
+  return results;
+}
+
+export async function insertServicePeriod(env, {
+  name, daysOfWeek, startTime, endTime, slotIntervalMinutes, turnTimeMinutes, coversCap,
+}) {
+  const res = await env.DB.prepare(
+    `INSERT INTO service_periods
+      (name, days_of_week, start_time, end_time, slot_interval_minutes, turn_time_minutes, covers_cap)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(name, daysOfWeek, startTime, endTime, slotIntervalMinutes, turnTimeMinutes, coversCap).run();
+  return res.meta.last_row_id;
+}
+
+export async function updateServicePeriod(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  for (const [col, val] of Object.entries(fields)) {
+    sets.push(`${col} = ?`);
+    binds.push(val);
+  }
+  if (!sets.length) return;
+  binds.push(id);
+  await env.DB.prepare(`UPDATE service_periods SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+}
+
 export async function getBlackoutDates(env) {
   const { results } = await env.DB.prepare('SELECT * FROM blackout_dates').all();
   return results;
+}
+
+export async function insertBlackoutDate(env, { date, reason }) {
+  const res = await env.DB.prepare(
+    'INSERT INTO blackout_dates (date, reason) VALUES (?, ?)',
+  ).bind(date, reason || null).run();
+  return res.meta.last_row_id;
+}
+
+export async function deleteBlackoutDate(env, id) {
+  await env.DB.prepare('DELETE FROM blackout_dates WHERE id = ?').bind(id).run();
 }
 
 export async function getReservationsForDate(env, date) {
