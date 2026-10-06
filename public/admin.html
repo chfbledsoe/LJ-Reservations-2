@@ -169,9 +169,16 @@
     </p>
     <div id="periods-wrap"></div>
     <div class="add-table-row">
-      <input type="text" id="new-period-name" placeholder="Name (e.g. Dinner)" style="width:120px;">
-      <input type="number" id="new-period-covers" placeholder="Max covers/slot" min="1" style="width:130px;">
-      <button id="add-period-btn" class="primary">+ Add service period</button>
+      <label class="field-label">New period name
+        <input type="text" id="new-period-name" placeholder="e.g. Brunch" style="width:140px;">
+      </label>
+      <label class="field-label">Booking interval (min)
+        <input type="number" id="new-period-interval" min="5" step="5" value="15" style="width:90px;">
+      </label>
+      <label class="field-label">Max covers / interval
+        <input type="number" id="new-period-covers" min="1" style="width:90px;">
+      </label>
+      <button id="add-period-btn" class="primary" style="margin-top:14px;">+ Add service period</button>
     </div>
 
     <h3 class="subhead">Closed dates (buyouts, holidays, private events)</h3>
@@ -609,7 +616,10 @@
             <label class="field-label">Last seating
               <input type="time" class="period-end" data-period="${p.id}" value="${p.end_time}">
             </label>
-            <label class="field-label">Max covers / slot
+            <label class="field-label">Booking interval (min)
+              <input type="number" class="period-interval" data-period="${p.id}" value="${p.slot_interval_minutes}" min="5" step="5" style="width:90px;">
+            </label>
+            <label class="field-label">Max covers / interval
               <input type="number" class="period-covers" data-period="${p.id}" value="${p.covers_cap}" min="1" style="width:90px;">
             </label>
             <label class="field-label" style="flex-direction:row; align-items:center; gap:5px; padding-top:14px;">
@@ -629,14 +639,21 @@
         if (!days) { alert('Select at least one day of the week.'); return; }
         const start = wrap.querySelector(`.period-start[data-period="${id}"]`).value;
         const end = wrap.querySelector(`.period-end[data-period="${id}"]`).value;
+        const interval = Number(wrap.querySelector(`.period-interval[data-period="${id}"]`).value);
         const covers = Number(wrap.querySelector(`.period-covers[data-period="${id}"]`).value);
         const active = wrap.querySelector(`.period-active[data-period="${id}"]`).checked ? 1 : 0;
-        if (!start || !end || !covers) { alert('Open time, last seating time, and max covers are all required.'); return; }
+        if (!start || !end || !interval || !covers) {
+          alert('Open time, last seating time, booking interval, and max covers are all required.');
+          return;
+        }
         btn.textContent = 'Saving…';
         await fetch(`/api/service-periods/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ days_of_week: days, start_time: start, end_time: end, covers_cap: covers, active }),
+          body: JSON.stringify({
+            days_of_week: days, start_time: start, end_time: end,
+            slot_interval_minutes: interval, covers_cap: covers, active,
+          }),
         });
         loadSettings();
       });
@@ -668,18 +685,21 @@
 
   $('add-period-btn').addEventListener('click', async () => {
     const name = $('new-period-name').value.trim();
+    const interval = Number($('new-period-interval').value);
     const covers = Number($('new-period-covers').value);
-    if (!name || !covers) { alert('Name and max covers/slot are required.'); return; }
+    if (!name || !interval || !covers) { alert('Name, booking interval, and max covers/interval are required.'); return; }
     await fetch('/api/service-periods', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // New periods start closed (no days selected) so staff set the days/hours via Save
       // before guests can book into them — avoids briefly opening every day by default.
       body: JSON.stringify({
-        name, days_of_week: '6', start_time: '17:00', end_time: '20:00', covers_cap: covers,
+        name, days_of_week: '6', start_time: '17:00', end_time: '20:00',
+        slot_interval_minutes: interval, covers_cap: covers,
       }),
     });
     $('new-period-name').value = '';
+    $('new-period-interval').value = '15';
     $('new-period-covers').value = '';
     loadSettings();
   });
