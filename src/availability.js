@@ -3,8 +3,19 @@
 //   1. Covers cap: total party_size of active reservations already starting in that
 //      exact slot must leave room for this party (per-service-period covers_cap).
 //   2. Table cap: at least one active table with capacity >= party_size must be free
-//      for the whole [time, time + turn_time_minutes) window (no overlapping reservation
-//      already seated at that table).
+//      for the whole turn window (no overlapping reservation already on that table).
+//
+// Turn time depends on party size: a table is held for 90 minutes for parties of 4 or
+// fewer and 120 minutes for parties of 5 or more. The next reservation on that table
+// can't start until the previous one's window has ended.
+
+export const SMALL_PARTY_MAX = 4;
+export const TURN_MINUTES_SMALL = 90;   // parties of 1-4
+export const TURN_MINUTES_LARGE = 120;  // parties of 5+
+
+export function turnTimeForParty(partySize) {
+  return partySize <= SMALL_PARTY_MAX ? TURN_MINUTES_SMALL : TURN_MINUTES_LARGE;
+}
 
 export function timeToMinutes(t) {
   const [h, m] = t.split(':').map(Number);
@@ -54,23 +65,28 @@ function windowsOverlap(startA, endA, startB, endB) {
   return startA < endB && startB < endA;
 }
 
-// Smallest-fit free table for a party at a given date/time, or null.
-export function findAvailableTable({ date, time, partySize, turnTimeMinutes, tables, reservations }) {
+// Is this specific table free for the whole turn window a party would need at date/time?
+// `excludeReservationId` lets a reservation be re-checked against its own table/time.
+export function isTableFree({ tableId, date, time, partySize, reservations, excludeReservationId = null }) {
   const reqStart = timeToMinutes(time);
-  const reqEnd = reqStart + turnTimeMinutes;
+  const reqEnd = reqStart + turnTimeForParty(partySize);
+  return !reservations.some((r) => {
+    if (r.table_id !== tableId || r.date !== date || !ACTIVE_STATUSES.has(r.status)) return false;
+    if (excludeReservationId != null && Number(r.id) === Number(excludeReservationId)) return false;
+    const rStart = timeToMinutes(r.time);
+    const rEnd = rStart + turnTimeForParty(r.party_size);
+    return windowsOverlap(reqStart, reqEnd, rStart, rEnd);
+  });
+}
 
+// Smallest-fit free table for a party at a given date/time, or null.
+export function findAvailableTable({ date, time, partySize, tables, reservations }) {
   const candidates = tables
     .filter((tb) => tb.active !== 0 && tb.capacity >= partySize)
     .sort((a, b) => a.capacity - b.capacity); // smallest table that fits, first
 
   for (const tb of candidates) {
-    const occupied = reservations.some((r) => {
-      if (r.table_id !== tb.id || r.date !== date || !ACTIVE_STATUSES.has(r.status)) return false;
-      const rStart = timeToMinutes(r.time);
-      const rEnd = rStart + (r.turn_time_minutes || turnTimeMinutes);
-      return windowsOverlap(reqStart, reqEnd, rStart, rEnd);
-    });
-    if (!occupied) return tb;
+    if (isTableFree({ tableId: tb.id, date, time, partySize, reservations })) return tb;
   }
   return null;
 }
@@ -86,9 +102,7 @@ export function computeAvailability({ date, partySize, tables, servicePeriods, r
     if (covers + partySize > period.covers_cap) {
       return { time, available: false, reason: 'covers_cap' };
     }
-    const table = findAvailableTable({
-      date, time, partySize, turnTimeMinutes: period.turn_time_minutes, tables, reservations,
-    });
+    const table = findAvailableTable({ date, time, partySize, tables, reservations });
     if (!table) {
       return { time, available: false, reason: 'no_table' };
     }
@@ -117,10 +131,8 @@ export function checkAndAssignTable({ date, time, partySize, tables, servicePeri
   if (covers + partySize > period.covers_cap) {
     return { ok: false, reason: 'covers_cap' };
   }
-  const table = findAvailableTable({
-    date, time, partySize, turnTimeMinutes: period.turn_time_minutes, tables, reservations,
-  });
+  const table = findAvailableTable({ date, time, partySize, tables, reservations });
   if (!table) return { ok: false, reason: 'no_table' };
 
-  return { ok: true, table, turnTimeMinutes: period.turn_time_minutes };
+  return { ok: true, table, turnTimeMinutes: turnTimeForParty(partySize) };
 }
