@@ -1,5 +1,5 @@
 import {
-  computeAvailability, checkAndAssignTable,
+  computeAvailability, checkAndAssignTable, isTableFree,
 } from './availability.js';
 import {
   getTables, getServicePeriods, getBlackoutDates, getReservationsForDate,
@@ -116,13 +116,24 @@ async function handleUpdateReservation(request, env, id) {
   const existing = await getReservation(env, id);
   if (!existing) return json({ error: 'not found' }, { status: 404 });
 
-  // Reassigning to a different table — a staff override from the floor plan / reservation
-  // list, independent of status. No overlap re-check here: staff can see the floor plan's
-  // occupancy for themselves, and this is a deliberate manual override.
+  // Reassigning to a different table (floor plan drag or the Table dropdown). The same
+  // hold rule as online booking applies: a table can't take another reservation until the
+  // previous one's window has passed (90 min for parties of 4 or fewer, 120 for 5+).
   if (body.table_id !== undefined) {
     const tables = await getTables(env);
     const table = tables.find((t) => t.id === body.table_id);
     if (!table) return json({ error: 'table_id does not match an active table' }, { status: 400 });
+    const sameDay = await getReservationsForDate(env, existing.date);
+    const free = isTableFree({
+      tableId: body.table_id, date: existing.date, time: existing.time,
+      partySize: existing.party_size, reservations: sameDay, excludeReservationId: id,
+    });
+    if (!free) {
+      return json({
+        error: `${table.name} is already held by another reservation during that time`,
+        reason: 'table_conflict',
+      }, { status: 409 });
+    }
     await updateReservationTable(env, id, body.table_id);
   }
 
