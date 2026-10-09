@@ -10,6 +10,7 @@
     --bg:#F6F4EC; --surface:#FFFFFF; --surface-2:#EFEBDD; --ink:#2A2820; --ink-soft:#5B5748;
     --line:#DCD5C1; --accent:#3C5A45; --accent-soft:#E4EBE2; --amber:#A97A2E; --amber-soft:#F3E6CC;
     --danger:#A9642E; --danger-soft:#F3E1CC; --patio:#3D6B8A; --patio-soft:#E1EBF1;
+    --free:#3E8E4F; --free-soft:#D3EBD6; --reserved:#C0392B; --reserved-soft:#F6D0CB; --seated:#C99A12; --seated-soft:#FBEBA6;
   }
   *{ box-sizing:border-box; }
   body{
@@ -53,8 +54,12 @@
     font-size: 0.74rem; font-weight:600; cursor: pointer; user-select:none; color: var(--ink);
     box-shadow: 0 1px 2px rgba(0,0,0,0.06);
   }
-  .table-box.patio{ border-color: var(--patio); background: var(--patio-soft); }
-  .table-box.occupied{ border-style: solid; box-shadow: 0 0 0 3px var(--amber-soft); }
+  /* Status colors: green = free, red = reserved (not yet seated), yellow = seated.
+     Patio tables keep a blue outline so they stay distinguishable. */
+  .table-box.status-available{ background: var(--free-soft); border-color: var(--free); }
+  .table-box.status-reserved{ background: var(--reserved-soft); border-color: var(--reserved); }
+  .table-box.status-seated{ background: var(--seated-soft); border-color: var(--seated); }
+  .table-box.patio{ border-color: var(--patio); border-style: dashed; }
   .table-box .cap{ font-weight:400; color: var(--ink-soft); font-size: 0.68rem; }
   .table-box.dragging{ opacity: 0.7; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 5; }
   .table-box.drop-target{ outline: 3px dashed var(--accent); outline-offset: 2px; }
@@ -131,9 +136,10 @@
     </div>
     <div id="floorplan"></div>
     <div class="legend">
-      <span><span class="swatch" style="background:var(--accent-soft); border:1.5px solid var(--accent);"></span>Main dining room</span>
-      <span><span class="swatch" style="background:var(--patio-soft); border:1.5px solid var(--patio);"></span>Patio</span>
-      <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Occupied at the time above</span>
+      <span><span class="swatch" style="background:var(--free-soft); border:1.5px solid var(--free);"></span>Available</span>
+      <span><span class="swatch" style="background:var(--reserved-soft); border:1.5px solid var(--reserved);"></span>Reserved</span>
+      <span><span class="swatch" style="background:var(--seated-soft); border:1.5px solid var(--seated);"></span>Seated</span>
+      <span><span class="swatch" style="background:#fff; border:1.5px dashed var(--patio);"></span>Patio (dashed blue outline)</span>
       <span style="margin-left:auto; color:var(--ink-soft);">Drag a reservation from the list onto a table to assign it. In edit mode, drag boxes to arrange, or click one to rename/resize/remove — then Save layout.</span>
     </div>
     <div id="add-table-wrap" hidden>
@@ -263,12 +269,28 @@
     return { x: 30 + col * 140, y: 30 + row * 100 };
   }
 
-  // Is `res` occupying its table at `atMinutes`? Uses its saved turn time, falling back to
-  // 90 minutes for reservations booked before that column existed.
+  // Mirrors the server's hold rule: 90 minutes for parties of 4 or fewer, 120 for 5+.
+  function turnMinutesFor(partySize) {
+    return partySize <= 4 ? 90 : 120;
+  }
+
+  // Is `res` holding its table at `atMinutes`?
   function occupiesAt(res, atMinutes) {
     const start = timeToMinutes(res.time);
-    const end = start + (res.turn_time_minutes || 90);
-    return atMinutes >= start && atMinutes < end;
+    return atMinutes >= start && atMinutes < start + turnMinutesFor(res.party_size);
+  }
+
+  // Floor-plan color for a table at the selected time:
+  //   seated   -> a party is seated there (stays yellow until marked Complete)
+  //   reserved -> a confirmed reservation is holding it right now
+  //   available -> otherwise
+  function tableStatus(todaysReservations, atMinutes) {
+    const seated = todaysReservations.some((r) =>
+      r.status === 'seated' && atMinutes >= timeToMinutes(r.time));
+    if (seated) return 'seated';
+    const reserved = todaysReservations.some((r) =>
+      r.status === 'confirmed' && occupiesAt(r, atMinutes));
+    return reserved ? 'reserved' : 'available';
   }
 
   function renderFloorplan() {
@@ -280,15 +302,16 @@
       const pos = dirtyPositions[t.id] || (t.pos_x != null ? { x: t.pos_x, y: t.pos_y } : fallbackPosition(i));
       const [w, h] = boxSize(t.capacity);
       const todaysReservations = reservations.filter((r) => r.table_id === t.id && r.status !== 'cancelled');
-      const occupiedNow = todaysReservations.some((r) => occupiesAt(r, atMinutes));
+      const status = tableStatus(todaysReservations, atMinutes);
 
       const box = document.createElement('div');
-      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + (occupiedNow ? ' occupied' : '');
+      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + ' status-' + status;
       box.style.left = pos.x + 'px';
       box.style.top = pos.y + 'px';
       box.style.width = w + 'px';
       box.style.height = h + 'px';
       box.dataset.id = t.id;
+      box.title = status === 'seated' ? 'Seated' : status === 'reserved' ? 'Reserved' : 'Available';
       box.innerHTML = `<div>${escapeHtml(t.name)}</div><div class="cap">seats ${t.capacity}</div>`;
 
       if (editMode) {
@@ -555,11 +578,16 @@
       const ok = confirm(`${table.name} seats ${table.capacity}, but this party is ${party}. Assign anyway?`);
       if (!ok) { renderList(); return; }
     }
-    await fetch(`/api/reservations/${id}`, {
+    const resp = await fetch(`/api/reservations/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ table_id: newTableId }),
     });
+    if (resp.status === 409) {
+      const data = await resp.json().catch(() => ({}));
+      alert((data.error || `${table.name} is already held by another reservation at that time.`) +
+        '\n\nTables are held 90 minutes for parties of 4 or fewer and 2 hours for parties of 5 or more.');
+    }
     load();
   }
 
