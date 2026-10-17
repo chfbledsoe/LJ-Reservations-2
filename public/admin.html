@@ -128,8 +128,38 @@
   <div class="toolbar">
     <input type="date" id="date">
     <button id="refresh">Refresh</button>
+    <button id="walkin-btn" class="primary">+ Walk-in</button>
     <span class="stat" id="stat"></span>
   </div>
+
+  <section class="panel" id="walkin-panel" hidden>
+    <h2>Add walk-in</h2>
+    <p style="margin:0 0 10px;font-size:0.85rem;color:var(--ink-soft)">Seats the party right now at the smallest free table that fits (or pick one).</p>
+    <div class="add-table-row">
+      <input type="text" id="wi-name" placeholder="Guest name" style="width:180px;">
+      <input type="number" id="wi-party" placeholder="Guests" min="1" style="width:90px;">
+      <select id="wi-table"></select>
+      <button id="wi-save" class="primary">Seat now</button>
+      <button id="wi-cancel">Cancel</button>
+    </div>
+  </section>
+
+  <section class="panel" id="edit-panel" hidden>
+    <h2>Edit reservation</h2>
+    <p style="margin:0 0 10px;font-size:0.85rem;color:var(--ink-soft)" id="ed-title"></p>
+    <div class="add-table-row">
+      <label class="field-label">Date <input type="date" id="ed-date"></label>
+      <label class="field-label">Time <input type="time" id="ed-time" step="900"></label>
+      <label class="field-label">Guests <input type="number" id="ed-party" min="1" style="width:80px;"></label>
+      <label class="field-label">Name <input type="text" id="ed-name" style="width:160px;"></label>
+      <label class="field-label">Phone <input type="text" id="ed-phone" style="width:130px;"></label>
+      <label class="field-label">Notes <input type="text" id="ed-notes" style="width:180px;"></label>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;">
+      <button id="ed-save" class="primary">Save changes</button>
+      <button id="ed-cancel">Cancel</button>
+    </div>
+  </section>
 
   <section class="panel">
     <div class="panel-head">
@@ -172,6 +202,23 @@
   </section>
 
   <section class="panel">
+    <h2>Waitlist</h2>
+    <div class="add-table-row">
+      <input type="text" id="wl-name" placeholder="Guest name" style="width:160px;">
+      <input type="text" id="wl-phone" placeholder="Phone" style="width:130px;">
+      <input type="text" id="wl-email" placeholder="Email" style="width:190px;">
+      <input type="number" id="wl-party" placeholder="Guests" min="1" value="2" style="width:80px;">
+      <label class="field-label">Preferred time <input type="time" id="wl-time" step="900"></label>
+      <input type="text" id="wl-notes" placeholder="Notes (optional)" style="width:160px;">
+      <button id="wl-add" class="primary">+ Add to waitlist</button>
+    </div>
+    <table class="list" style="margin-top:12px;">
+      <thead><tr><th>Added</th><th>Guest</th><th>Party</th><th>Preferred</th><th>Contact</th><th>Actions</th></tr></thead>
+      <tbody id="wl-body"></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
     <div class="panel-head">
       <h2>Hours &amp; closures</h2>
     </div>
@@ -204,7 +251,7 @@
       <button id="add-blackout-btn" class="primary">+ Add closed date</button>
     </div>
   </section>
-  <p class="build-tag">Admin build: Oct 9 — reservations listed under tables, Unseat button</p>
+  <p class="build-tag">Admin build: Oct 17 — walk-ins, edit reservations, waitlist</p>
 </div>
 
 <script>
@@ -241,6 +288,7 @@
     renderStat();
     renderFloorplan();
     renderList();
+    loadWaitlist();
   }
 
   function todayStr() {
@@ -522,6 +570,9 @@
     tbody.querySelectorAll('button[data-action]').forEach((btn) => {
       btn.addEventListener('click', () => updateStatus(btn.dataset.id, btn.dataset.action));
     });
+    tbody.querySelectorAll('button[data-edit]').forEach((btn) => {
+      btn.addEventListener('click', () => openEdit(Number(btn.dataset.edit)));
+    });
     tbody.querySelectorAll('select[data-reassign]').forEach((sel) => {
       sel.addEventListener('change', () => {
         reassignTableTo(sel.dataset.reassign, Number(sel.value), Number(sel.dataset.party));
@@ -544,11 +595,13 @@
   function actionButtons(r) {
     if (r.status === 'confirmed') {
       return `<button class="primary" data-action="seated" data-id="${r.id}">Seat</button>
+              <button data-edit="${r.id}">Edit</button>
               <button class="danger" data-action="no_show" data-id="${r.id}">No-show</button>
               <button data-action="cancelled" data-id="${r.id}">Cancel</button>`;
     }
     if (r.status === 'seated') {
       return `<button class="warn" data-action="completed" data-id="${r.id}">Complete</button>
+              <button data-edit="${r.id}">Edit</button>
               <button data-action="confirmed" data-id="${r.id}">Unseat</button>`;
     }
     return '';
@@ -584,6 +637,144 @@
     }
     load();
   }
+
+  // --- Walk-ins, editing reservations, waitlist ---
+
+  function nowTimeStr() {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  async function postJson(url, method, payload) {
+    const resp = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await resp.json().catch(() => ({}));
+    return { ok: resp.ok, data };
+  }
+
+  $('walkin-btn').addEventListener('click', () => {
+    $('edit-panel').hidden = true;
+    $('wi-table').innerHTML = '<option value="">Auto-pick table</option>' + tableOptions(null);
+    $('walkin-panel').hidden = false;
+    $('wi-name').focus();
+  });
+  $('wi-cancel').addEventListener('click', () => { $('walkin-panel').hidden = true; });
+  $('wi-save').addEventListener('click', async () => {
+    const name = $('wi-name').value.trim();
+    const party = Number($('wi-party').value);
+    if (!name || !party) { alert('Enter a guest name and number of guests.'); return; }
+    // A walk-in is always seated for today, now — regardless of the date being viewed.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const { ok, data } = await postJson('/api/walk-ins', 'POST', {
+      guest_name: name, party_size: party, date: today, time: nowTimeStr(),
+      table_id: $('wi-table').value ? Number($('wi-table').value) : undefined,
+    });
+    if (!ok) { alert(data.error || 'Could not seat walk-in.'); return; }
+    $('wi-name').value = ''; $('wi-party').value = '';
+    $('walkin-panel').hidden = true;
+    dateInput.value = today;
+    await load();
+  });
+
+  let editingId = null;
+  function openEdit(id) {
+    const r = reservations.find((x) => x.id === id);
+    if (!r) return;
+    editingId = id;
+    $('walkin-panel').hidden = true;
+    $('ed-title').textContent = `${r.guest_name} — currently ${formatTime(r.time)}, party of ${r.party_size}, ${r.table_name || 'no table'}`;
+    $('ed-date').value = r.date;
+    $('ed-time').value = r.time;
+    $('ed-party').value = r.party_size;
+    $('ed-name').value = r.guest_name;
+    $('ed-phone').value = r.phone || '';
+    $('ed-notes').value = r.notes || '';
+    $('edit-panel').hidden = false;
+    $('edit-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  $('ed-cancel').addEventListener('click', () => { $('edit-panel').hidden = true; editingId = null; });
+  const REASONS = {
+    covers_cap: 'That time is full.', no_table: 'No table is free at that time for that party size.',
+    invalid_slot: 'That is not a bookable time (check the booking interval).', blackout: 'The restaurant is closed that day.',
+  };
+  $('ed-save').addEventListener('click', async () => {
+    if (editingId == null) return;
+    const { ok, data } = await postJson(`/api/reservations/${editingId}`, 'PATCH', {
+      date: $('ed-date').value, time: $('ed-time').value, party_size: Number($('ed-party').value),
+      guest_name: $('ed-name').value, phone: $('ed-phone').value, notes: $('ed-notes').value,
+    });
+    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not save changes.') + '\n\nThe reservation was not changed.'); return; }
+    $('edit-panel').hidden = true; editingId = null;
+    await load();
+  });
+
+  let waitlist = [];
+  async function loadWaitlist() {
+    const resp = await fetch(`/api/waitlist?date=${dateInput.value}`);
+    if (!resp.ok) return;
+    ({ waitlist } = await resp.json());
+    renderWaitlist();
+  }
+  function renderWaitlist() {
+    const body = $('wl-body');
+    if (!waitlist.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No one on the waitlist for this date.</td></tr>';
+      return;
+    }
+    body.innerHTML = waitlist.map((w) => `
+      <tr>
+        <td>${escapeHtml((w.created_at || '').slice(11, 16))}</td>
+        <td>${escapeHtml(w.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(w.notes || '')}</span></td>
+        <td>${w.party_size}</td>
+        <td>${w.preferred_time ? formatTime(w.preferred_time) : '—'}</td>
+        <td style="font-size:0.8rem">${escapeHtml(w.phone || '')}<br>${escapeHtml(w.email || '')}</td>
+        <td class="actions">
+          <button class="primary" data-wl-book="${w.id}">Book</button>
+          <button class="warn" data-wl-seat="${w.id}">Seat now</button>
+          <button data-wl-remove="${w.id}">Remove</button>
+        </td>
+      </tr>`).join('');
+    body.querySelectorAll('[data-wl-book]').forEach((b) => b.addEventListener('click', () => placeWaitlist(Number(b.dataset.wlBook), 'book')));
+    body.querySelectorAll('[data-wl-seat]').forEach((b) => b.addEventListener('click', () => placeWaitlist(Number(b.dataset.wlSeat), 'seat')));
+    body.querySelectorAll('[data-wl-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove this party from the waitlist?')) return;
+      await postJson(`/api/waitlist/${b.dataset.wlRemove}`, 'PATCH', { status: 'removed' });
+      loadWaitlist();
+    }));
+  }
+  async function placeWaitlist(id, mode) {
+    const w = waitlist.find((x) => x.id === id);
+    let time = w.preferred_time;
+    let date = w.date;
+    if (mode === 'seat') {
+      time = nowTimeStr();
+      const d = new Date();
+      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    } else if (!time) {
+      time = prompt('What time (24-hour, e.g. 18:30)?');
+      if (!time) return;
+    }
+    const { ok, data } = await postJson(`/api/waitlist/${id}/place`, 'POST', { mode, time, date });
+    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not place this party.') + '\n\nThey are still on the waitlist.'); return; }
+    await load();
+  }
+  $('wl-add').addEventListener('click', async () => {
+    const name = $('wl-name').value.trim();
+    const phone = $('wl-phone').value.trim();
+    const email = $('wl-email').value.trim();
+    if (!name || (!phone && !email)) { alert('Enter a name and a phone number or email.'); return; }
+    const { ok, data } = await postJson('/api/waitlist', 'POST', {
+      date: dateInput.value, guest_name: name, phone, email,
+      party_size: Number($('wl-party').value) || 2, preferred_time: $('wl-time').value || undefined,
+      notes: $('wl-notes').value.trim(),
+    });
+    if (!ok) { alert(data.error || 'Could not add to waitlist.'); return; }
+    ['wl-name', 'wl-phone', 'wl-email', 'wl-notes', 'wl-time'].forEach((i) => { $(i).value = ''; });
+    $('wl-party').value = 2;
+    loadWaitlist();
+  });
 
   function formatTime(hhmm) {
     const [h, m] = hhmm.split(':').map(Number);
