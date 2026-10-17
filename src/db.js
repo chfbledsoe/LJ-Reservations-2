@@ -86,9 +86,10 @@ export async function insertReservation(env, r) {
   const res = await env.DB.prepare(
     `INSERT INTO reservations
       (date, time, party_size, guest_name, phone, email, notes, table_id, turn_time_minutes, status, square_customer_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).bind(r.date, r.time, r.partySize, r.guestName, r.phone || null, r.email || null,
-    r.notes || null, r.tableId, r.turnTimeMinutes || null, r.squareCustomerId || null).run();
+    r.notes || null, r.tableId, r.turnTimeMinutes || null, r.status || 'confirmed',
+    r.squareCustomerId || null).run();
   return res.meta.last_row_id;
 }
 
@@ -116,4 +117,81 @@ export async function updateReservationTable(env, id, tableId) {
 export async function cancelReservation(env, id) {
   await env.DB.prepare(`UPDATE reservations SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?`)
     .bind(id).run();
+}
+
+
+// Edit a reservation's details (time, party size, date, contact info, table).
+const RESERVATION_EDIT_COLUMNS = ['date', 'time', 'party_size', 'guest_name', 'phone', 'email', 'notes', 'table_id', 'turn_time_minutes'];
+export async function updateReservationDetails(env, id, fields) {
+  const sets = [];
+  const binds = [];
+  for (const [col, val] of Object.entries(fields)) {
+    if (!RESERVATION_EDIT_COLUMNS.includes(col)) continue; // never build SQL from unknown keys
+    sets.push(`${col} = ?`);
+    binds.push(val);
+  }
+  if (!sets.length) return;
+  sets.push("updated_at = datetime('now')");
+  binds.push(id);
+  await env.DB.prepare(`UPDATE reservations SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+}
+
+// ---- Waitlist ----
+// Created on first use so no manual SQL step is needed when deploying this feature.
+let waitlistReady = false;
+async function ensureWaitlist(env) {
+  if (waitlistReady) return;
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS waitlist (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      guest_name TEXT NOT NULL,
+      phone TEXT,
+      email TEXT,
+      party_size INTEGER NOT NULL DEFAULT 2,
+      preferred_time TEXT,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'waiting',  -- waiting | booked | seated | removed
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`,
+  ).run();
+  waitlistReady = true;
+}
+
+export async function getWaitlist(env, date) {
+  await ensureWaitlist(env);
+  const { results } = await env.DB.prepare(
+    `SELECT * FROM waitlist WHERE date = ? AND status = 'waiting' ORDER BY created_at, id`,
+  ).bind(date).all();
+  return results;
+}
+
+export async function getWaitlistEntry(env, id) {
+  await ensureWaitlist(env);
+  return env.DB.prepare('SELECT * FROM waitlist WHERE id = ?').bind(id).first();
+}
+
+export async function insertWaitlist(env, w) {
+  await ensureWaitlist(env);
+  const res = await env.DB.prepare(
+    `INSERT INTO waitlist (date, guest_name, phone, email, party_size, preferred_time, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(w.date, w.guestName, w.phone || null, w.email || null, w.partySize,
+    w.preferredTime || null, w.notes || null).run();
+  return res.meta.last_row_id;
+}
+
+export async function updateWaitlist(env, id, fields) {
+  await ensureWaitlist(env);
+  const allowed = ['guest_name', 'phone', 'email', 'party_size', 'preferred_time', 'notes', 'status'];
+  const sets = [];
+  const binds = [];
+  for (const [col, val] of Object.entries(fields)) {
+    if (!allowed.includes(col)) continue;
+    sets.push(`${col} = ?`);
+    binds.push(val);
+  }
+  if (!sets.length) return;
+  binds.push(id);
+  await env.DB.prepare(`UPDATE waitlist SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
 }
