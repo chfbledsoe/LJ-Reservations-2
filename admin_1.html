@@ -10,6 +10,7 @@
     --bg:#F6F4EC; --surface:#FFFFFF; --surface-2:#EFEBDD; --ink:#2A2820; --ink-soft:#5B5748;
     --line:#DCD5C1; --accent:#3C5A45; --accent-soft:#E4EBE2; --amber:#A97A2E; --amber-soft:#F3E6CC;
     --danger:#A9642E; --danger-soft:#F3E1CC; --patio:#3D6B8A; --patio-soft:#E1EBF1;
+    --free:#3E8E4F; --free-soft:#D3EBD6; --reserved:#C0392B; --reserved-soft:#F6D0CB; --seated:#C99A12; --seated-soft:#FBEBA6;
   }
   *{ box-sizing:border-box; }
   body{
@@ -37,11 +38,14 @@
   button.danger{ background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
   section.panel{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 22px; }
+  .nightly-total{ display:flex; flex-wrap:wrap; gap:10px 28px; align-items:baseline; margin-top:14px; padding:12px 14px; background:var(--accent-soft); border:1px solid var(--line); border-radius:8px; font-size:0.85rem; }
+  .nightly-total .big{ font-family:"EB Garamond", serif; font-weight:600; font-size:1.5rem; color:var(--accent); }
+  .nightly-total .lbl{ color:var(--ink-soft); font-size:0.78rem; display:block; }
   .panel-head{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom: 10px; }
 
   /* --- Floor plan --- */
   #floorplan{
-    position: relative; height: 420px; background:
+    position: relative; height: 480px; background:
       linear-gradient(var(--surface-2) 1px, transparent 1px),
       linear-gradient(90deg, var(--surface-2) 1px, transparent 1px);
     background-size: 20px 20px; border: 1px dashed var(--line); border-radius: 8px;
@@ -53,8 +57,20 @@
     font-size: 0.74rem; font-weight:600; cursor: pointer; user-select:none; color: var(--ink);
     box-shadow: 0 1px 2px rgba(0,0,0,0.06);
   }
-  .table-box.patio{ border-color: var(--patio); background: var(--patio-soft); }
-  .table-box.occupied{ border-style: solid; box-shadow: 0 0 0 3px var(--amber-soft); }
+  /* Status colors: green = free, red = reserved (not yet seated), yellow = seated.
+     Patio tables keep a blue outline so they stay distinguishable. */
+  .table-box.status-available{ background: var(--free-soft); border-color: var(--free); }
+  .table-box.status-reserved{ background: var(--reserved-soft); border-color: var(--reserved); }
+  .table-box.status-seated{ background: var(--seated-soft); border-color: var(--seated); }
+  .table-box.patio{ border-color: var(--patio); border-style: dashed; }
+  .table-box{ overflow: visible; }
+  .tb-list{
+    position:absolute; top:100%; left:50%; transform:translateX(-50%); margin-top:3px;
+    min-width:100%; width:max-content; max-width:170px; text-align:center; pointer-events:none;
+  }
+  .tb-res{ font-weight:500; font-size:0.66rem; line-height:1.3; color:var(--ink); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .tb-res.seated{ color:#7A5B00; font-weight:600; }
+  .tb-res.more{ color:var(--ink-soft); font-style:italic; }
   .table-box .cap{ font-weight:400; color: var(--ink-soft); font-size: 0.68rem; }
   .table-box.dragging{ opacity: 0.7; box-shadow: 0 4px 10px rgba(0,0,0,0.18); z-index: 5; }
   .table-box.drop-target{ outline: 3px dashed var(--accent); outline-offset: 2px; }
@@ -105,6 +121,7 @@
   .actions{ display:flex; gap: 6px; flex-wrap: wrap; }
   .empty{ padding: 30px; text-align:center; color: var(--ink-soft); }
   .notes{ font-size: 0.8rem; color: var(--ink-soft); max-width: 200px; }
+  .build-tag{ margin:18px 0 0; font-size:0.7rem; color:var(--ink-soft); text-align:center; }
 </style>
 </head>
 <body>
@@ -113,13 +130,39 @@
   <h1>Reservations</h1>
   <div class="toolbar">
     <input type="date" id="date">
-    <label style="font-size:0.8rem; color:var(--ink-soft); display:flex; align-items:center; gap:6px;">
-      Floor plan time
-      <input type="time" id="floor-time" step="900">
-    </label>
     <button id="refresh">Refresh</button>
+    <button id="walkin-btn" class="primary">+ Walk-in</button>
     <span class="stat" id="stat"></span>
   </div>
+
+  <section class="panel" id="walkin-panel" hidden>
+    <h2>Add walk-in</h2>
+    <p style="margin:0 0 10px;font-size:0.85rem;color:var(--ink-soft)">Seats the party right now at the smallest free table that fits (or pick one).</p>
+    <div class="add-table-row">
+      <input type="text" id="wi-name" placeholder="Guest name" style="width:180px;">
+      <input type="number" id="wi-party" placeholder="Guests" min="1" style="width:90px;">
+      <select id="wi-table"></select>
+      <button id="wi-save" class="primary">Seat now</button>
+      <button id="wi-cancel">Cancel</button>
+    </div>
+  </section>
+
+  <section class="panel" id="edit-panel" hidden>
+    <h2>Edit reservation</h2>
+    <p style="margin:0 0 10px;font-size:0.85rem;color:var(--ink-soft)" id="ed-title"></p>
+    <div class="add-table-row">
+      <label class="field-label">Date <input type="date" id="ed-date"></label>
+      <label class="field-label">Time <input type="time" id="ed-time" step="900"></label>
+      <label class="field-label">Guests <input type="number" id="ed-party" min="1" style="width:80px;"></label>
+      <label class="field-label">Name <input type="text" id="ed-name" style="width:160px;"></label>
+      <label class="field-label">Phone <input type="text" id="ed-phone" style="width:130px;"></label>
+      <label class="field-label">Notes <input type="text" id="ed-notes" style="width:180px;"></label>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;">
+      <button id="ed-save" class="primary">Save changes</button>
+      <button id="ed-cancel">Cancel</button>
+    </div>
+  </section>
 
   <section class="panel">
     <div class="panel-head">
@@ -131,9 +174,10 @@
     </div>
     <div id="floorplan"></div>
     <div class="legend">
-      <span><span class="swatch" style="background:var(--accent-soft); border:1.5px solid var(--accent);"></span>Main dining room</span>
-      <span><span class="swatch" style="background:var(--patio-soft); border:1.5px solid var(--patio);"></span>Patio</span>
-      <span><span class="swatch" style="background:var(--amber-soft); box-shadow:0 0 0 2px var(--amber-soft);"></span>Occupied at the time above</span>
+      <span><span class="swatch" style="background:var(--free-soft); border:1.5px solid var(--free);"></span>Available</span>
+      <span><span class="swatch" style="background:var(--reserved-soft); border:1.5px solid var(--reserved);"></span>Reserved</span>
+      <span><span class="swatch" style="background:var(--seated-soft); border:1.5px solid var(--seated);"></span>Seated</span>
+      <span><span class="swatch" style="background:#fff; border:1.5px dashed var(--patio);"></span>Patio (dashed blue outline)</span>
       <span style="margin-left:auto; color:var(--ink-soft);">Drag a reservation from the list onto a table to assign it. In edit mode, drag boxes to arrange, or click one to rename/resize/remove — then Save layout.</span>
     </div>
     <div id="add-table-wrap" hidden>
@@ -158,6 +202,24 @@
       </thead>
       <tbody id="tbody"></tbody>
     </table>
+    <div id="nightly-total" class="nightly-total"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Waitlist</h2>
+    <div class="add-table-row">
+      <input type="text" id="wl-name" placeholder="Guest name" style="width:160px;">
+      <input type="text" id="wl-phone" placeholder="Phone" style="width:130px;">
+      <input type="text" id="wl-email" placeholder="Email" style="width:190px;">
+      <input type="number" id="wl-party" placeholder="Guests" min="1" value="2" style="width:80px;">
+      <label class="field-label">Preferred time <input type="time" id="wl-time" step="900"></label>
+      <input type="text" id="wl-notes" placeholder="Notes (optional)" style="width:160px;">
+      <button id="wl-add" class="primary">+ Add to waitlist</button>
+    </div>
+    <table class="list" style="margin-top:12px;">
+      <thead><tr><th>Added</th><th>Guest</th><th>Party</th><th>Preferred</th><th>Contact</th><th>Actions</th></tr></thead>
+      <tbody id="wl-body"></tbody>
+    </table>
   </section>
 
   <section class="panel">
@@ -169,10 +231,16 @@
     </p>
     <div id="periods-wrap"></div>
     <div class="add-table-row">
-      <input type="text" id="new-period-name" placeholder="Name (e.g. Dinner)" style="width:120px;">
-      <input type="number" id="new-period-interval" placeholder="Interval (min)" min="5" step="5" value="15" style="width:110px;">
-      <input type="number" id="new-period-covers" placeholder="Max covers/interval" min="1" style="width:140px;">
-      <button id="add-period-btn" class="primary">+ Add service period</button>
+      <label class="field-label">New period name
+        <input type="text" id="new-period-name" placeholder="e.g. Brunch" style="width:140px;">
+      </label>
+      <label class="field-label">Booking interval (min)
+        <input type="number" id="new-period-interval" min="5" step="5" value="15" style="width:90px;">
+      </label>
+      <label class="field-label">Max covers / interval
+        <input type="number" id="new-period-covers" min="1" style="width:90px;">
+      </label>
+      <button id="add-period-btn" class="primary" style="margin-top:14px;">+ Add service period</button>
     </div>
 
     <h3 class="subhead">Closed dates (buyouts, holidays, private events)</h3>
@@ -187,23 +255,13 @@
       <button id="add-blackout-btn" class="primary">+ Add closed date</button>
     </div>
   </section>
+  <p class="build-tag">Admin build: Oct 17 — walk-ins, edit reservations, waitlist, nightly total</p>
 </div>
 
 <script>
   const $ = (id) => document.getElementById(id);
   const dateInput = $('date');
-  const floorTimeInput = $('floor-time');
-  dateInput.value = new Date().toISOString().slice(0, 10);
-
-  // Default the floor-plan clock to "now" (rounded to the nearest 15 min) when looking at
-  // today; otherwise default to the start of dinner service, since a future date has no
-  // meaningful "now".
-  (function setDefaultFloorTime() {
-    const now = new Date();
-    const rounded = new Date(now);
-    rounded.setMinutes(Math.round(now.getMinutes() / 15) * 15, 0, 0);
-    floorTimeInput.value = rounded.toTimeString().slice(0, 5);
-  })();
+  dateInput.value = todayStr();
 
   let tables = [];
   let reservations = [];
@@ -234,9 +292,13 @@
     renderStat();
     renderFloorplan();
     renderList();
+    loadWaitlist();
   }
 
-  floorTimeInput.addEventListener('change', renderFloorplan);
+  function todayStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
 
   function renderStat() {
     const active = reservations.filter((r) => r.status !== 'cancelled');
@@ -257,33 +319,45 @@
     return { x: 30 + col * 140, y: 30 + row * 100 };
   }
 
-  // Is `res` occupying its table at `atMinutes`? Uses its saved turn time, falling back to
-  // 90 minutes for reservations booked before that column existed.
-  function occupiesAt(res, atMinutes) {
-    const start = timeToMinutes(res.time);
-    const end = start + (res.turn_time_minutes || 90);
-    return atMinutes >= start && atMinutes < end;
+  // Floor-plan color for a table for the selected date:
+  //   seated    -> a party is seated there (stays yellow until marked Complete or Unseated)
+  //   reserved  -> it has a confirmed reservation that hasn't been seated yet
+  //   available -> no active reservations
+  function tableStatus(activeReservations) {
+    if (activeReservations.some((r) => r.status === 'seated')) return 'seated';
+    if (activeReservations.some((r) => r.status === 'confirmed')) return 'reserved';
+    return 'available';
   }
 
   function renderFloorplan() {
     const el = $('floorplan');
     el.innerHTML = '';
-    const atMinutes = timeToMinutes(floorTimeInput.value || '18:00');
 
     tables.forEach((t, i) => {
       const pos = dirtyPositions[t.id] || (t.pos_x != null ? { x: t.pos_x, y: t.pos_y } : fallbackPosition(i));
       const [w, h] = boxSize(t.capacity);
       const todaysReservations = reservations.filter((r) => r.table_id === t.id && r.status !== 'cancelled');
-      const occupiedNow = todaysReservations.some((r) => occupiesAt(r, atMinutes));
+      // Active = still on the table's books today (not finished, cancelled or a no-show).
+      const active = todaysReservations
+        .filter((r) => r.status === 'confirmed' || r.status === 'seated')
+        .sort((a, b) => a.time.localeCompare(b.time));
+      const status = tableStatus(active);
 
       const box = document.createElement('div');
-      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + (occupiedNow ? ' occupied' : '');
+      box.className = 'table-box' + (t.section === 'Patio' ? ' patio' : '') + ' status-' + status;
       box.style.left = pos.x + 'px';
       box.style.top = pos.y + 'px';
       box.style.width = w + 'px';
       box.style.height = h + 'px';
       box.dataset.id = t.id;
-      box.innerHTML = `<div>${escapeHtml(t.name)}</div><div class="cap">seats ${t.capacity}</div>`;
+      box.title = status === 'seated' ? 'Seated' : status === 'reserved' ? 'Reserved' : 'Available';
+      const shown = active.slice(0, 4);
+      const more = active.length - shown.length;
+      const listHtml = shown.map((r) =>
+        `<div class="tb-res${r.status === 'seated' ? ' seated' : ''}">${formatTime(r.time)} · ${escapeHtml(r.guest_name)} (${r.party_size})</div>`
+      ).join('') + (more > 0 ? `<div class="tb-res more">+${more} more</div>` : '');
+      box.innerHTML = `<div>${escapeHtml(t.name)}</div><div class="cap">seats ${t.capacity}</div>` +
+        (listHtml ? `<div class="tb-list">${listHtml}</div>` : '');
 
       if (editMode) {
         box.addEventListener('pointerdown', (e) => startDrag(e, box, t.id));
@@ -464,9 +538,23 @@
     return html;
   }
 
+  function renderNightlyTotal() {
+    const sum = (arr) => arr.reduce((n, r) => n + r.party_size, 0);
+    const by = (st) => reservations.filter((r) => st.includes(r.status));
+    const served = by(['seated', 'completed']);
+    const expected = by(['confirmed']);
+    const noShow = by(['no_show']);
+    $('nightly-total').innerHTML = `
+      <div><span class="big">${sum(served)}</span><span class="lbl">Total covers (seated + completed)</span></div>
+      <div><span class="big">${served.length}</span><span class="lbl">Parties seated</span></div>
+      <div><span class="big">${sum(expected)}</span><span class="lbl">Still expected (${expected.length} parties)</span></div>
+      <div><span class="big">${sum(noShow)}</span><span class="lbl">No-show covers</span></div>`;
+  }
+
   function renderList() {
     const tbody = $('tbody');
     tbody.innerHTML = '';
+    renderNightlyTotal();
 
     if (!reservations.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty">No reservations for this date.</td></tr>';
@@ -500,6 +588,9 @@
     tbody.querySelectorAll('button[data-action]').forEach((btn) => {
       btn.addEventListener('click', () => updateStatus(btn.dataset.id, btn.dataset.action));
     });
+    tbody.querySelectorAll('button[data-edit]').forEach((btn) => {
+      btn.addEventListener('click', () => openEdit(Number(btn.dataset.edit)));
+    });
     tbody.querySelectorAll('select[data-reassign]').forEach((sel) => {
       sel.addEventListener('change', () => {
         reassignTableTo(sel.dataset.reassign, Number(sel.value), Number(sel.dataset.party));
@@ -522,11 +613,14 @@
   function actionButtons(r) {
     if (r.status === 'confirmed') {
       return `<button class="primary" data-action="seated" data-id="${r.id}">Seat</button>
+              <button data-edit="${r.id}">Edit</button>
               <button class="danger" data-action="no_show" data-id="${r.id}">No-show</button>
               <button data-action="cancelled" data-id="${r.id}">Cancel</button>`;
     }
     if (r.status === 'seated') {
-      return `<button class="warn" data-action="completed" data-id="${r.id}">Complete</button>`;
+      return `<button class="warn" data-action="completed" data-id="${r.id}">Complete</button>
+              <button data-edit="${r.id}">Edit</button>
+              <button data-action="confirmed" data-id="${r.id}">Unseat</button>`;
     }
     return '';
   }
@@ -549,13 +643,156 @@
       const ok = confirm(`${table.name} seats ${table.capacity}, but this party is ${party}. Assign anyway?`);
       if (!ok) { renderList(); return; }
     }
-    await fetch(`/api/reservations/${id}`, {
+    const resp = await fetch(`/api/reservations/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ table_id: newTableId }),
     });
+    if (resp.status === 409) {
+      const data = await resp.json().catch(() => ({}));
+      alert((data.error || `${table.name} is already held by another reservation at that time.`) +
+        '\n\nTables are held 90 minutes for parties of 4 or fewer and 2 hours for parties of 5 or more.');
+    }
     load();
   }
+
+  // --- Walk-ins, editing reservations, waitlist ---
+
+  function nowTimeStr() {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  async function postJson(url, method, payload) {
+    const resp = await fetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await resp.json().catch(() => ({}));
+    return { ok: resp.ok, data };
+  }
+
+  $('walkin-btn').addEventListener('click', () => {
+    $('edit-panel').hidden = true;
+    $('wi-table').innerHTML = '<option value="">Auto-pick table</option>' + tableOptions(null);
+    $('walkin-panel').hidden = false;
+    $('wi-name').focus();
+  });
+  $('wi-cancel').addEventListener('click', () => { $('walkin-panel').hidden = true; });
+  $('wi-save').addEventListener('click', async () => {
+    const name = $('wi-name').value.trim();
+    const party = Number($('wi-party').value);
+    if (!name || !party) { alert('Enter a guest name and number of guests.'); return; }
+    // A walk-in is always seated for today, now — regardless of the date being viewed.
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const { ok, data } = await postJson('/api/walk-ins', 'POST', {
+      guest_name: name, party_size: party, date: today, time: nowTimeStr(),
+      table_id: $('wi-table').value ? Number($('wi-table').value) : undefined,
+    });
+    if (!ok) { alert(data.error || 'Could not seat walk-in.'); return; }
+    $('wi-name').value = ''; $('wi-party').value = '';
+    $('walkin-panel').hidden = true;
+    dateInput.value = today;
+    await load();
+  });
+
+  let editingId = null;
+  function openEdit(id) {
+    const r = reservations.find((x) => x.id === id);
+    if (!r) return;
+    editingId = id;
+    $('walkin-panel').hidden = true;
+    $('ed-title').textContent = `${r.guest_name} — currently ${formatTime(r.time)}, party of ${r.party_size}, ${r.table_name || 'no table'}`;
+    $('ed-date').value = r.date;
+    $('ed-time').value = r.time;
+    $('ed-party').value = r.party_size;
+    $('ed-name').value = r.guest_name;
+    $('ed-phone').value = r.phone || '';
+    $('ed-notes').value = r.notes || '';
+    $('edit-panel').hidden = false;
+    $('edit-panel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  $('ed-cancel').addEventListener('click', () => { $('edit-panel').hidden = true; editingId = null; });
+  const REASONS = {
+    covers_cap: 'That time is full.', no_table: 'No table is free at that time for that party size.',
+    invalid_slot: 'That is not a bookable time (check the booking interval).', blackout: 'The restaurant is closed that day.',
+  };
+  $('ed-save').addEventListener('click', async () => {
+    if (editingId == null) return;
+    const { ok, data } = await postJson(`/api/reservations/${editingId}`, 'PATCH', {
+      date: $('ed-date').value, time: $('ed-time').value, party_size: Number($('ed-party').value),
+      guest_name: $('ed-name').value, phone: $('ed-phone').value, notes: $('ed-notes').value,
+    });
+    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not save changes.') + '\n\nThe reservation was not changed.'); return; }
+    $('edit-panel').hidden = true; editingId = null;
+    await load();
+  });
+
+  let waitlist = [];
+  async function loadWaitlist() {
+    const resp = await fetch(`/api/waitlist?date=${dateInput.value}`);
+    if (!resp.ok) return;
+    ({ waitlist } = await resp.json());
+    renderWaitlist();
+  }
+  function renderWaitlist() {
+    const body = $('wl-body');
+    if (!waitlist.length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No one on the waitlist for this date.</td></tr>';
+      return;
+    }
+    body.innerHTML = waitlist.map((w) => `
+      <tr>
+        <td>${escapeHtml((w.created_at || '').slice(11, 16))}</td>
+        <td>${escapeHtml(w.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(w.notes || '')}</span></td>
+        <td>${w.party_size}</td>
+        <td>${w.preferred_time ? formatTime(w.preferred_time) : '—'}</td>
+        <td style="font-size:0.8rem">${escapeHtml(w.phone || '')}<br>${escapeHtml(w.email || '')}</td>
+        <td class="actions">
+          <button class="primary" data-wl-book="${w.id}">Book</button>
+          <button class="warn" data-wl-seat="${w.id}">Seat now</button>
+          <button data-wl-remove="${w.id}">Remove</button>
+        </td>
+      </tr>`).join('');
+    body.querySelectorAll('[data-wl-book]').forEach((b) => b.addEventListener('click', () => placeWaitlist(Number(b.dataset.wlBook), 'book')));
+    body.querySelectorAll('[data-wl-seat]').forEach((b) => b.addEventListener('click', () => placeWaitlist(Number(b.dataset.wlSeat), 'seat')));
+    body.querySelectorAll('[data-wl-remove]').forEach((b) => b.addEventListener('click', async () => {
+      if (!confirm('Remove this party from the waitlist?')) return;
+      await postJson(`/api/waitlist/${b.dataset.wlRemove}`, 'PATCH', { status: 'removed' });
+      loadWaitlist();
+    }));
+  }
+  async function placeWaitlist(id, mode) {
+    const w = waitlist.find((x) => x.id === id);
+    let time = w.preferred_time;
+    let date = w.date;
+    if (mode === 'seat') {
+      time = nowTimeStr();
+      const d = new Date();
+      date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    } else if (!time) {
+      time = prompt('What time (24-hour, e.g. 18:30)?');
+      if (!time) return;
+    }
+    const { ok, data } = await postJson(`/api/waitlist/${id}/place`, 'POST', { mode, time, date });
+    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not place this party.') + '\n\nThey are still on the waitlist.'); return; }
+    await load();
+  }
+  $('wl-add').addEventListener('click', async () => {
+    const name = $('wl-name').value.trim();
+    const phone = $('wl-phone').value.trim();
+    const email = $('wl-email').value.trim();
+    if (!name || (!phone && !email)) { alert('Enter a name and a phone number or email.'); return; }
+    const { ok, data } = await postJson('/api/waitlist', 'POST', {
+      date: dateInput.value, guest_name: name, phone, email,
+      party_size: Number($('wl-party').value) || 2, preferred_time: $('wl-time').value || undefined,
+      notes: $('wl-notes').value.trim(),
+    });
+    if (!ok) { alert(data.error || 'Could not add to waitlist.'); return; }
+    ['wl-name', 'wl-phone', 'wl-email', 'wl-notes', 'wl-time'].forEach((i) => { $(i).value = ''; });
+    $('wl-party').value = 2;
+    loadWaitlist();
+  });
 
   function formatTime(hhmm) {
     const [h, m] = hhmm.split(':').map(Number);
