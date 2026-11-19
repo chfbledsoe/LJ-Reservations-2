@@ -115,7 +115,10 @@ export function computeAvailability({ date, partySize, tables, servicePeriods, r
 // Re-validates + picks a table right before insert, to close the race window between
 // a guest viewing availability and submitting the form. Same rules as computeAvailability
 // for one specific slot.
-export function checkAndAssignTable({ date, time, partySize, tables, servicePeriods, reservations, blackoutDates }) {
+export function checkAndAssignTable({
+  date, time, partySize, tables, servicePeriods, reservations, blackoutDates,
+  ignoreCoversCap = false, ignoreSlotGrid = false, // manager override only
+}) {
   if (isBlackedOut(date, blackoutDates)) {
     return { ok: false, reason: 'blackout' };
   }
@@ -125,10 +128,10 @@ export function checkAndAssignTable({ date, time, partySize, tables, servicePeri
     const t = timeToMinutes(time);
     return t >= start && t <= end && (t - start) % p.slot_interval_minutes === 0;
   });
-  if (!period) return { ok: false, reason: 'invalid_slot' };
+  if (!period && !ignoreSlotGrid) return { ok: false, reason: 'invalid_slot' };
 
   const covers = coversAlreadyBooked(date, time, reservations);
-  if (covers + partySize > period.covers_cap) {
+  if (period && !ignoreCoversCap && covers + partySize > period.covers_cap) {
     return { ok: false, reason: 'covers_cap' };
   }
   const table = findAvailableTable({ date, time, partySize, tables, reservations });

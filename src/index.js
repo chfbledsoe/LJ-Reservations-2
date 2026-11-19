@@ -7,10 +7,27 @@ import {
   insertReservation, getReservation, updateReservationStatus, cancelReservation,
   insertTable, updateTable, updateReservationTable,
   getAllServicePeriods, insertServicePeriod, updateServicePeriod,
-  insertBlackoutDate, deleteBlackoutDate, updateReservationDetails,
+  insertBlackoutDate, deleteBlackoutDate, updateReservationDetails, getMarketingOptIns,
   getWaitlist, getWaitlistEntry, insertWaitlist, updateWaitlist,
 } from './db.js';
 import { upsertSquareCustomer, createSquareOrder } from './square.js';
+
+// Manager override: a code kept as the MANAGER_OVERRIDE_CODE secret. Hosts never see it.
+// Returns 'ok' (valid code), 'none' (no code sent), 'bad' (wrong/unset code).
+function checkOverride(body, env) {
+  const sent = body && body.override_code;
+  if (!sent) return 'none';
+  const real = env.MANAGER_OVERRIDE_CODE;
+  if (!real || String(sent).length !== String(real).length) return 'bad';
+  let diff = 0;
+  for (let i = 0; i < real.length; i++) diff |= String(sent).charCodeAt(i) ^ real.charCodeAt(i);
+  return diff === 0 ? 'ok' : 'bad';
+}
+const BAD_CODE = () => json({ error: 'Incorrect manager code', reason: 'bad_override' }, { status: 403 });
+const OVERRIDABLE = new Set(['covers_cap', 'invalid_slot', 'no_table', 'table_conflict']);
+function conflict(error, reason) {
+  return { error, reason, overridable: OVERRIDABLE.has(reason) };
+}
 
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -89,6 +106,8 @@ async function handleCreateReservation(request, env) {
   const id = await insertReservation(env, {
     date, time, partySize, guestName, phone, email, notes,
     tableId: check.table.id, turnTimeMinutes: check.turnTimeMinutes, squareCustomerId,
+    // Only an explicit true counts as consent; it's never assumed.
+    marketingOptIn: body.marketing_opt_in === true,
   });
 
   return json({
@@ -120,9 +139,13 @@ async function handleUpdateReservation(request, env, id) {
   const existing = await getReservation(env, id);
   if (!existing) return json({ error: 'not found' }, { status: 404 });
 
+  const ov = checkOverride(body, env);
+  if (ov === 'bad') return BAD_CODE();
+  const override = ov === 'ok';
+
   // Editing details (move the time/date, change party size, fix contact info).
   if (hasEdit) {
-    const editResult = await applyReservationEdit(env, existing, body);
+    const editResult = await applyReservationEdit(env, existing, body, override);
     if (editResult.error) return json(editResult.error, { status: editResult.status });
     if (!body.status && body.table_id === undefined) {
       const updated = await getReservation(env, id);
@@ -143,11 +166,9 @@ async function handleUpdateReservation(request, env, id) {
       tableId: body.table_id, date: existing.date, time: existing.time,
       partySize: existing.party_size, reservations: sameDay, excludeReservationId: id,
     });
-    if (!free) {
-      return json({
-        error: `${table.name} is already held by another reservation during that time`,
-        reason: 'table_conflict',
-      }, { status: 409 });
+    if (!free && !override) {
+      return json(conflict(`${table.name} is already held by another reservation during that time`, 'table_conflict'),
+        { status: 409 });
     }
     await updateReservationTable(env, id, body.table_id);
   }
@@ -189,7 +210,7 @@ async function handleUpdateReservation(request, env, id) {
 // Staff edit of an existing reservation. Re-validates the slot, the covers cap and the
 // table hold (ignoring the reservation itself). Keeps the current table when it still
 // works; otherwise moves the party to another free table; otherwise refuses with 409.
-async function applyReservationEdit(env, existing, body) {
+async function applyReservationEdit(env, existing, body, override = false) {
   const date = body.date !== undefined ? String(body.date) : existing.date;
   const time = body.time !== undefined ? String(body.time) : existing.time;
   const partySize = body.party_size !== undefined ? Number(body.party_size) : existing.party_size;
@@ -219,15 +240,15 @@ async function applyReservationEdit(env, existing, body) {
         && (t - timeToMinutes(p.start_time)) % p.slot_interval_minutes === 0;
     });
     const slotMoved = date !== existing.date || time !== existing.time;
-    if (!period && slotMoved) {
-      return { status: 409, error: { error: 'That time is not a bookable slot for that day', reason: 'invalid_slot' } };
+    if (!period && slotMoved && !override) {
+      return { status: 409, error: conflict('That time is not a bookable slot for that day', 'invalid_slot') };
     }
     const sameDay = (await getReservationsForDate(env, date)).filter((r) => Number(r.id) !== Number(existing.id));
     const coversThere = sameDay
       .filter((r) => r.time === time && ['confirmed', 'seated'].includes(r.status))
       .reduce((n, r) => n + r.party_size, 0);
-    if (period && coversThere + partySize > period.covers_cap) {
-      return { status: 409, error: { error: 'That time is full (covers limit reached)', reason: 'covers_cap' } };
+    if (period && !override && coversThere + partySize > period.covers_cap) {
+      return { status: 409, error: conflict('That time is full (covers limit reached)', 'covers_cap') };
     }
 
     // Keep current table if it still fits and is free; else find another.
@@ -239,14 +260,20 @@ async function applyReservationEdit(env, existing, body) {
     } else {
       table = findAvailableTable({ date, time, partySize, tables, reservations: sameDay });
     }
+    if (!table && override && current) table = current; // manager says let the table sit
     if (!table) {
-      return { status: 409, error: { error: 'No table is free for that time and party size', reason: 'no_table' } };
+      return { status: 409, error: conflict('No table is free for that time and party size', 'no_table') };
     }
     Object.assign(fields, {
       date, time, party_size: partySize, table_id: table.id, turn_time_minutes: turnTimeForParty(partySize),
     });
   }
 
+  if (override) {
+    const stamp = `[Manager override ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+    fields.notes = `${fields.notes !== undefined ? (fields.notes || '') : (existing.notes || '')} ${stamp}`.trim();
+    console.log(`Manager override used on reservation ${existing.id}`);
+  }
   await updateReservationDetails(env, existing.id, fields);
   return { applied: fields };
 }
@@ -362,6 +389,9 @@ async function handlePlaceWaitlist(request, env, id) {
   const body = await request.json().catch(() => null);
   const entry = await getWaitlistEntry(env, id);
   if (!entry || entry.status !== 'waiting') return json({ error: 'not found' }, { status: 404 });
+  const ov = checkOverride(body, env);
+  if (ov === 'bad') return BAD_CODE();
+  const override = ov === 'ok';
   const mode = body?.mode === 'seat' ? 'seat' : 'book';
   const date = body?.date || entry.date;
   const time = body?.time || entry.preferred_time;
@@ -382,9 +412,10 @@ async function handlePlaceWaitlist(request, env, id) {
     const reservations = await getReservationsForDate(env, date);
     const check = checkAndAssignTable({
       date, time, partySize: entry.party_size, tables, servicePeriods, reservations, blackoutDates,
+      ignoreCoversCap: override, ignoreSlotGrid: override,
     });
     if (!check.ok) {
-      return json({ error: 'That time is not available', reason: check.reason }, { status: 409 });
+      return json(conflict('That time is not available', check.reason), { status: 409 });
     }
     let squareCustomerId = null;
     try {
@@ -402,6 +433,31 @@ async function handlePlaceWaitlist(request, env, id) {
   }
   await updateWaitlist(env, id, { status: mode === 'seat' ? 'seated' : 'booked' });
   return json({ id: reservationId, mode }, { status: 201 });
+}
+
+function csvCell(v) {
+  const t = String(v ?? '');
+  // Neutralize spreadsheet formula injection from guest-entered text.
+  const safe = /^[=+\-@]/.test(t) ? `'${t}` : t;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+async function handleMarketingExport(request, env) {
+  const rows = await getMarketingOptIns(env);
+  const seen = new Set();
+  const lines = ['Name,Phone,Email,Opted in (UTC),Reservation date'];
+  for (const r of rows) {
+    const key = (r.phone || '').replace(/\D/g, '') || (r.email || '').toLowerCase();
+    if (seen.has(key)) continue; // one line per guest, most recent opt-in
+    seen.add(key);
+    lines.push([r.guest_name, r.phone, r.email, r.marketing_opt_in_at, r.date].map(csvCell).join(','));
+  }
+  return new Response(lines.join('\r\n'), {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="marketing-opt-ins.csv"',
+    },
+  });
 }
 
 async function handleListTables(request, env) {
@@ -533,6 +589,11 @@ export default {
         return await handleUpdateReservation(request, env, Number(patchMatch[1]));
       }
 
+      if (pathname === '/api/marketing-optins.csv' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleMarketingExport(request, env);
+      }
       if (pathname === '/api/walk-ins' && request.method === 'POST') {
         const authFail = requireBasicAuth(request, env);
         if (authFail) return authFail;

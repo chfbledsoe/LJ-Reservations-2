@@ -82,14 +82,40 @@ export async function getReservationsForDate(env, date) {
   return results;
 }
 
+// Adds the marketing opt-in columns the first time they're needed (no manual SQL step).
+let marketingReady = false;
+async function ensureMarketingColumns(env) {
+  if (marketingReady) return;
+  const { results } = await env.DB.prepare('PRAGMA table_info(reservations)').all();
+  const have = new Set(results.map((c) => c.name));
+  if (!have.has('marketing_opt_in')) {
+    await env.DB.prepare('ALTER TABLE reservations ADD COLUMN marketing_opt_in INTEGER NOT NULL DEFAULT 0').run();
+  }
+  if (!have.has('marketing_opt_in_at')) {
+    await env.DB.prepare('ALTER TABLE reservations ADD COLUMN marketing_opt_in_at TEXT').run();
+  }
+  marketingReady = true;
+}
+
+export async function getMarketingOptIns(env) {
+  await ensureMarketingColumns(env);
+  const { results } = await env.DB.prepare(
+    `SELECT guest_name, phone, email, marketing_opt_in_at, date FROM reservations
+     WHERE marketing_opt_in = 1 ORDER BY marketing_opt_in_at DESC, id DESC`,
+  ).all();
+  return results;
+}
+
 export async function insertReservation(env, r) {
+  await ensureMarketingColumns(env);
   const res = await env.DB.prepare(
     `INSERT INTO reservations
-      (date, time, party_size, guest_name, phone, email, notes, table_id, turn_time_minutes, status, square_customer_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (date, time, party_size, guest_name, phone, email, notes, table_id, turn_time_minutes, status, square_customer_id,
+       marketing_opt_in, marketing_opt_in_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${r.marketingOptIn ? "datetime('now')" : 'NULL'})`,
   ).bind(r.date, r.time, r.partySize, r.guestName, r.phone || null, r.email || null,
     r.notes || null, r.tableId, r.turnTimeMinutes || null, r.status || 'confirmed',
-    r.squareCustomerId || null).run();
+    r.squareCustomerId || null, r.marketingOptIn ? 1 : 0).run();
   return res.meta.last_row_id;
 }
 
