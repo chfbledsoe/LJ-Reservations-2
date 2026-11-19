@@ -1,14 +1,33 @@
 import {
-  computeAvailability, checkAndAssignTable, isTableFree,
+  computeAvailability, checkAndAssignTable, isTableFree, findAvailableTable,
+  periodsForDate, isBlackedOut, timeToMinutes, turnTimeForParty,
 } from './availability.js';
 import {
   getTables, getServicePeriods, getBlackoutDates, getReservationsForDate,
   insertReservation, getReservation, updateReservationStatus, cancelReservation,
   insertTable, updateTable, updateReservationTable,
   getAllServicePeriods, insertServicePeriod, updateServicePeriod,
-  insertBlackoutDate, deleteBlackoutDate,
+  insertBlackoutDate, deleteBlackoutDate, updateReservationDetails, getMarketingOptIns,
+  getWaitlist, getWaitlistEntry, insertWaitlist, updateWaitlist,
 } from './db.js';
 import { upsertSquareCustomer, createSquareOrder } from './square.js';
+
+// Manager override: a code kept as the MANAGER_OVERRIDE_CODE secret. Hosts never see it.
+// Returns 'ok' (valid code), 'none' (no code sent), 'bad' (wrong/unset code).
+function checkOverride(body, env) {
+  const sent = body && body.override_code;
+  if (!sent) return 'none';
+  const real = env.MANAGER_OVERRIDE_CODE;
+  if (!real || String(sent).length !== String(real).length) return 'bad';
+  let diff = 0;
+  for (let i = 0; i < real.length; i++) diff |= String(sent).charCodeAt(i) ^ real.charCodeAt(i);
+  return diff === 0 ? 'ok' : 'bad';
+}
+const BAD_CODE = () => json({ error: 'Incorrect manager code', reason: 'bad_override' }, { status: 403 });
+const OVERRIDABLE = new Set(['covers_cap', 'invalid_slot', 'no_table', 'table_conflict']);
+function conflict(error, reason) {
+  return { error, reason, overridable: OVERRIDABLE.has(reason) };
+}
 
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
@@ -87,6 +106,8 @@ async function handleCreateReservation(request, env) {
   const id = await insertReservation(env, {
     date, time, partySize, guestName, phone, email, notes,
     tableId: check.table.id, turnTimeMinutes: check.turnTimeMinutes, squareCustomerId,
+    // Only an explicit true counts as consent; it's never assumed.
+    marketingOptIn: body.marketing_opt_in === true,
   });
 
   return json({
@@ -109,12 +130,29 @@ async function handleListReservations(request, env) {
 
 async function handleUpdateReservation(request, env, id) {
   const body = await request.json().catch(() => null);
-  if (!body || (!body.status && body.table_id === undefined)) {
-    return json({ error: 'status or table_id is required' }, { status: 400 });
+  const EDIT_KEYS = ['date', 'time', 'party_size', 'guest_name', 'phone', 'email', 'notes'];
+  const hasEdit = body && EDIT_KEYS.some((k) => body[k] !== undefined);
+  if (!body || (!body.status && body.table_id === undefined && !hasEdit)) {
+    return json({ error: 'status, table_id, or reservation details are required' }, { status: 400 });
   }
 
   const existing = await getReservation(env, id);
   if (!existing) return json({ error: 'not found' }, { status: 404 });
+
+  const ov = checkOverride(body, env);
+  if (ov === 'bad') return BAD_CODE();
+  const override = ov === 'ok';
+
+  // Editing details (move the time/date, change party size, fix contact info).
+  if (hasEdit) {
+    const editResult = await applyReservationEdit(env, existing, body, override);
+    if (editResult.error) return json(editResult.error, { status: editResult.status });
+    if (!body.status && body.table_id === undefined) {
+      const updated = await getReservation(env, id);
+      return json({ ...updated });
+    }
+    Object.assign(existing, editResult.applied); // later checks use the edited values
+  }
 
   // Reassigning to a different table (floor plan drag or the Table dropdown). The same
   // hold rule as online booking applies: a table can't take another reservation until the
@@ -128,11 +166,9 @@ async function handleUpdateReservation(request, env, id) {
       tableId: body.table_id, date: existing.date, time: existing.time,
       partySize: existing.party_size, reservations: sameDay, excludeReservationId: id,
     });
-    if (!free) {
-      return json({
-        error: `${table.name} is already held by another reservation during that time`,
-        reason: 'table_conflict',
-      }, { status: 409 });
+    if (!free && !override) {
+      return json(conflict(`${table.name} is already held by another reservation during that time`, 'table_conflict'),
+        { status: 409 });
     }
     await updateReservationTable(env, id, body.table_id);
   }
@@ -168,6 +204,260 @@ async function handleUpdateReservation(request, env, id) {
 
   await updateReservationStatus(env, id, body.status, { squareOrderId });
   return json({ id, status: body.status, square_order_id: squareOrderId || null });
+}
+
+
+// Staff edit of an existing reservation. Re-validates the slot, the covers cap and the
+// table hold (ignoring the reservation itself). Keeps the current table when it still
+// works; otherwise moves the party to another free table; otherwise refuses with 409.
+async function applyReservationEdit(env, existing, body, override = false) {
+  const date = body.date !== undefined ? String(body.date) : existing.date;
+  const time = body.time !== undefined ? String(body.time) : existing.time;
+  const partySize = body.party_size !== undefined ? Number(body.party_size) : existing.party_size;
+  const guestName = body.guest_name !== undefined ? String(body.guest_name).trim() : existing.guest_name;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { status: 400, error: { error: 'date must be YYYY-MM-DD' } };
+  if (!/^\d{2}:\d{2}$/.test(time)) return { status: 400, error: { error: 'time must be HH:MM' } };
+  if (!Number.isInteger(partySize) || partySize < 1) {
+    return { status: 400, error: { error: 'party_size must be a positive whole number' } };
+  }
+  if (!guestName) return { status: 400, error: { error: 'guest_name cannot be empty' } };
+
+  const timingChanged = date !== existing.date || time !== existing.time || partySize !== existing.party_size;
+  const fields = { guest_name: guestName };
+  for (const k of ['phone', 'email', 'notes']) {
+    if (body[k] !== undefined) fields[k] = body[k] || null;
+  }
+
+  if (timingChanged) {
+    const { tables, servicePeriods, blackoutDates } = await loadContext(env);
+    if (isBlackedOut(date, blackoutDates)) {
+      return { status: 409, error: { error: 'That date is closed', reason: 'blackout' } };
+    }
+    const period = periodsForDate(date, servicePeriods).find((p) => {
+      const t = timeToMinutes(time);
+      return t >= timeToMinutes(p.start_time) && t <= timeToMinutes(p.end_time)
+        && (t - timeToMinutes(p.start_time)) % p.slot_interval_minutes === 0;
+    });
+    const slotMoved = date !== existing.date || time !== existing.time;
+    if (!period && slotMoved && !override) {
+      return { status: 409, error: conflict('That time is not a bookable slot for that day', 'invalid_slot') };
+    }
+    const sameDay = (await getReservationsForDate(env, date)).filter((r) => Number(r.id) !== Number(existing.id));
+    const coversThere = sameDay
+      .filter((r) => r.time === time && ['confirmed', 'seated'].includes(r.status))
+      .reduce((n, r) => n + r.party_size, 0);
+    if (period && !override && coversThere + partySize > period.covers_cap) {
+      return { status: 409, error: conflict('That time is full (covers limit reached)', 'covers_cap') };
+    }
+
+    // Keep current table if it still fits and is free; else find another.
+    const current = tables.find((t) => t.id === existing.table_id);
+    let table = null;
+    if (current && current.capacity >= partySize
+      && isTableFree({ tableId: current.id, date, time, partySize, reservations: sameDay })) {
+      table = current;
+    } else {
+      table = findAvailableTable({ date, time, partySize, tables, reservations: sameDay });
+    }
+    if (!table && override && current) table = current; // manager says let the table sit
+    if (!table) {
+      return { status: 409, error: conflict('No table is free for that time and party size', 'no_table') };
+    }
+    Object.assign(fields, {
+      date, time, party_size: partySize, table_id: table.id, turn_time_minutes: turnTimeForParty(partySize),
+    });
+  }
+
+  if (override) {
+    const stamp = `[Manager override ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC]`;
+    fields.notes = `${fields.notes !== undefined ? (fields.notes || '') : (existing.notes || '')} ${stamp}`.trim();
+    console.log(`Manager override used on reservation ${existing.id}`);
+  }
+  await updateReservationDetails(env, existing.id, fields);
+  return { applied: fields };
+}
+
+// Seat a party right now without a prior reservation (walk-in). Staff override: ignores the
+// per-slot covers cap and slot grid, but still needs a genuinely free table.
+async function seatWalkIn(env, { date, time, partySize, guestName, phone, email, notes, tableId }) {
+  const tables = await getTables(env);
+  const sameDay = await getReservationsForDate(env, date);
+  let table = null;
+  if (tableId) {
+    const t = tables.find((x) => x.id === Number(tableId));
+    if (!t) return { status: 400, error: { error: 'table_id does not match an active table' } };
+    if (t.capacity < partySize) {
+      return { status: 409, error: { error: `${t.name} only seats ${t.capacity}`, reason: 'too_small' } };
+    }
+    if (!isTableFree({ tableId: t.id, date, time, partySize, reservations: sameDay })) {
+      return { status: 409, error: { error: `${t.name} is held by another reservation`, reason: 'table_conflict' } };
+    }
+    table = t;
+  } else {
+    table = findAvailableTable({ date, time, partySize, tables, reservations: sameDay });
+  }
+  if (!table) {
+    return { status: 409, error: { error: 'No table is free right now for that party size', reason: 'no_table' } };
+  }
+
+  const id = await insertReservation(env, {
+    date, time, partySize, guestName, phone, email, notes,
+    tableId: table.id, turnTimeMinutes: turnTimeForParty(partySize), status: 'seated',
+  });
+  let squareOrderId;
+  try {
+    squareOrderId = await createSquareOrder(env, {
+      referenceId: id, note: `${guestName} — party of ${partySize} (walk-in)`,
+    });
+    if (squareOrderId) await updateReservationStatus(env, id, 'seated', { squareOrderId });
+  } catch (err) {
+    console.error('Square order creation failed:', err.message);
+  }
+  return { id, table };
+}
+
+function validDate(d) { return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d); }
+function validTime(t) { return typeof t === 'string' && /^\d{2}:\d{2}$/.test(t); }
+
+async function handleWalkIn(request, env) {
+  const body = await request.json().catch(() => null);
+  const guestName = String(body?.guest_name || '').trim();
+  const partySize = Number(body?.party_size);
+  if (!guestName || !Number.isInteger(partySize) || partySize < 1) {
+    return json({ error: 'guest_name and a positive party_size are required' }, { status: 400 });
+  }
+  if (!validDate(body.date) || !validTime(body.time)) {
+    return json({ error: 'date (YYYY-MM-DD) and time (HH:MM) are required' }, { status: 400 });
+  }
+  const r = await seatWalkIn(env, {
+    date: body.date, time: body.time, partySize, guestName,
+    phone: body.phone, email: body.email, notes: body.notes, tableId: body.table_id,
+  });
+  if (r.error) return json(r.error, { status: r.status });
+  return json({ id: r.id, table: r.table.name, table_id: r.table.id, status: 'seated' }, { status: 201 });
+}
+
+async function handleListWaitlist(request, env) {
+  const date = new URL(request.url).searchParams.get('date');
+  if (!validDate(date)) return json({ error: 'date is required' }, { status: 400 });
+  return json({ waitlist: await getWaitlist(env, date) });
+}
+
+async function handleCreateWaitlist(request, env) {
+  const body = await request.json().catch(() => null);
+  const guestName = String(body?.guest_name || '').trim();
+  const partySize = Number(body?.party_size || 2);
+  if (!guestName || !validDate(body?.date) || !Number.isInteger(partySize) || partySize < 1) {
+    return json({ error: 'date, guest_name and a positive party_size are required' }, { status: 400 });
+  }
+  if (!body.phone && !body.email) {
+    return json({ error: 'a phone number or email is required' }, { status: 400 });
+  }
+  if (body.preferred_time && !validTime(body.preferred_time)) {
+    return json({ error: 'preferred_time must be HH:MM' }, { status: 400 });
+  }
+  const id = await insertWaitlist(env, {
+    date: body.date, guestName, phone: body.phone, email: body.email,
+    partySize, preferredTime: body.preferred_time, notes: body.notes,
+  });
+  return json({ id }, { status: 201 });
+}
+
+async function handleUpdateWaitlist(request, env, id) {
+  const body = await request.json().catch(() => null);
+  const entry = await getWaitlistEntry(env, id);
+  if (!entry) return json({ error: 'not found' }, { status: 404 });
+  const fields = {};
+  for (const k of ['guest_name', 'phone', 'email', 'party_size', 'preferred_time', 'notes']) {
+    if (body?.[k] !== undefined) fields[k] = body[k];
+  }
+  if (body?.status !== undefined) {
+    if (!['waiting', 'removed'].includes(body.status)) {
+      return json({ error: 'status must be waiting or removed' }, { status: 400 });
+    }
+    fields.status = body.status;
+  }
+  if (!Object.keys(fields).length) return json({ error: 'nothing to update' }, { status: 400 });
+  await updateWaitlist(env, id, fields);
+  return json({ id, ...fields });
+}
+
+// Move a waitlisted party onto the book: { mode: 'book', date, time } makes a confirmed
+// reservation (normal slot/cap/table rules); { mode: 'seat', date, time } seats them now.
+async function handlePlaceWaitlist(request, env, id) {
+  const body = await request.json().catch(() => null);
+  const entry = await getWaitlistEntry(env, id);
+  if (!entry || entry.status !== 'waiting') return json({ error: 'not found' }, { status: 404 });
+  const ov = checkOverride(body, env);
+  if (ov === 'bad') return BAD_CODE();
+  const override = ov === 'ok';
+  const mode = body?.mode === 'seat' ? 'seat' : 'book';
+  const date = body?.date || entry.date;
+  const time = body?.time || entry.preferred_time;
+  if (!validDate(date) || !validTime(time)) {
+    return json({ error: 'a time (HH:MM) is required' }, { status: 400 });
+  }
+
+  let reservationId;
+  if (mode === 'seat') {
+    const r = await seatWalkIn(env, {
+      date, time, partySize: entry.party_size, guestName: entry.guest_name,
+      phone: entry.phone, email: entry.email, notes: entry.notes, tableId: body?.table_id,
+    });
+    if (r.error) return json(r.error, { status: r.status });
+    reservationId = r.id;
+  } else {
+    const { tables, servicePeriods, blackoutDates } = await loadContext(env);
+    const reservations = await getReservationsForDate(env, date);
+    const check = checkAndAssignTable({
+      date, time, partySize: entry.party_size, tables, servicePeriods, reservations, blackoutDates,
+      ignoreCoversCap: override, ignoreSlotGrid: override,
+    });
+    if (!check.ok) {
+      return json(conflict('That time is not available', check.reason), { status: 409 });
+    }
+    let squareCustomerId = null;
+    try {
+      squareCustomerId = await upsertSquareCustomer(env, {
+        name: entry.guest_name, phone: entry.phone, email: entry.email, note: entry.notes,
+      });
+    } catch (err) {
+      console.error('Square customer upsert failed:', err.message);
+    }
+    reservationId = await insertReservation(env, {
+      date, time, partySize: entry.party_size, guestName: entry.guest_name,
+      phone: entry.phone, email: entry.email, notes: entry.notes,
+      tableId: check.table.id, turnTimeMinutes: check.turnTimeMinutes, squareCustomerId,
+    });
+  }
+  await updateWaitlist(env, id, { status: mode === 'seat' ? 'seated' : 'booked' });
+  return json({ id: reservationId, mode }, { status: 201 });
+}
+
+function csvCell(v) {
+  const t = String(v ?? '');
+  // Neutralize spreadsheet formula injection from guest-entered text.
+  const safe = /^[=+\-@]/.test(t) ? `'${t}` : t;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+async function handleMarketingExport(request, env) {
+  const rows = await getMarketingOptIns(env);
+  const seen = new Set();
+  const lines = ['Name,Phone,Email,Opted in (UTC),Reservation date'];
+  for (const r of rows) {
+    const key = (r.phone || '').replace(/\D/g, '') || (r.email || '').toLowerCase();
+    if (seen.has(key)) continue; // one line per guest, most recent opt-in
+    seen.add(key);
+    lines.push([r.guest_name, r.phone, r.email, r.marketing_opt_in_at, r.date].map(csvCell).join(','));
+  }
+  return new Response(lines.join('\r\n'), {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="marketing-opt-ins.csv"',
+    },
+  });
 }
 
 async function handleListTables(request, env) {
@@ -297,6 +587,36 @@ export default {
         const authFail = requireBasicAuth(request, env);
         if (authFail) return authFail;
         return await handleUpdateReservation(request, env, Number(patchMatch[1]));
+      }
+
+      if (pathname === '/api/marketing-optins.csv' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleMarketingExport(request, env);
+      }
+      if (pathname === '/api/walk-ins' && request.method === 'POST') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleWalkIn(request, env);
+      }
+      if (pathname === '/api/waitlist' && request.method === 'GET') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleListWaitlist(request, env);
+      }
+      if (pathname === '/api/waitlist' && request.method === 'POST') {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        return await handleCreateWaitlist(request, env);
+      }
+      const waitMatch = pathname.match(/^\/api\/waitlist\/(\d+)(\/place)?$/);
+      if (waitMatch && (request.method === 'PATCH' || (request.method === 'POST' && waitMatch[2]))) {
+        const authFail = requireBasicAuth(request, env);
+        if (authFail) return authFail;
+        const wid = Number(waitMatch[1]);
+        return waitMatch[2]
+          ? await handlePlaceWaitlist(request, env, wid)
+          : await handleUpdateWaitlist(request, env, wid);
       }
 
       if (pathname === '/api/tables' && request.method === 'GET') {
