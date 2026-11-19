@@ -38,6 +38,9 @@
   button.danger{ background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 
   section.panel{ background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 22px; }
+  .nightly-total{ display:flex; flex-wrap:wrap; gap:10px 28px; align-items:baseline; margin-top:14px; padding:12px 14px; background:var(--accent-soft); border:1px solid var(--line); border-radius:8px; font-size:0.85rem; }
+  .nightly-total .big{ font-family:"EB Garamond", serif; font-weight:600; font-size:1.5rem; color:var(--accent); }
+  .nightly-total .lbl{ color:var(--ink-soft); font-size:0.78rem; display:block; }
   .panel-head{ display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom: 10px; }
 
   /* --- Floor plan --- */
@@ -129,6 +132,7 @@
     <input type="date" id="date">
     <button id="refresh">Refresh</button>
     <button id="walkin-btn" class="primary">+ Walk-in</button>
+    <a href="/api/marketing-optins.csv" download><button type="button">Download opt-in list</button></a>
     <span class="stat" id="stat"></span>
   </div>
 
@@ -199,6 +203,7 @@
       </thead>
       <tbody id="tbody"></tbody>
     </table>
+    <div id="nightly-total" class="nightly-total"></div>
   </section>
 
   <section class="panel">
@@ -251,7 +256,7 @@
       <button id="add-blackout-btn" class="primary">+ Add closed date</button>
     </div>
   </section>
-  <p class="build-tag">Admin build: Oct 17 — walk-ins, edit reservations, waitlist</p>
+  <p class="build-tag">Admin build: Oct 17 — walk-ins, edit reservations, waitlist, nightly total, manager override</p>
 </div>
 
 <script>
@@ -534,9 +539,23 @@
     return html;
   }
 
+  function renderNightlyTotal() {
+    const sum = (arr) => arr.reduce((n, r) => n + r.party_size, 0);
+    const by = (st) => reservations.filter((r) => st.includes(r.status));
+    const served = by(['seated', 'completed']);
+    const expected = by(['confirmed']);
+    const noShow = by(['no_show']);
+    $('nightly-total').innerHTML = `
+      <div><span class="big">${sum(served)}</span><span class="lbl">Total covers (seated + completed)</span></div>
+      <div><span class="big">${served.length}</span><span class="lbl">Parties seated</span></div>
+      <div><span class="big">${sum(expected)}</span><span class="lbl">Still expected (${expected.length} parties)</span></div>
+      <div><span class="big">${sum(noShow)}</span><span class="lbl">No-show covers</span></div>`;
+  }
+
   function renderList() {
     const tbody = $('tbody');
     tbody.innerHTML = '';
+    renderNightlyTotal();
 
     if (!reservations.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty">No reservations for this date.</td></tr>';
@@ -555,7 +574,7 @@
       }
       tr.innerHTML = `
         <td class="time">${formatTime(r.time)}</td>
-        <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(r.phone || r.email || '')}</span></td>
+        <td>${escapeHtml(r.guest_name)}<br><span style="color:var(--ink-soft);font-size:0.78rem">${escapeHtml(r.phone || r.email || '')}</span>${r.marketing_opt_in ? '<br><span class="pill" title="Agreed to receive promotional texts/emails">opted in to offers</span>' : ''}</td>
         <td>${r.party_size}</td>
         <td>${canReassign
           ? `<select data-reassign="${r.id}" data-party="${r.party_size}">${tableOptions(r.table_id)}</select>`
@@ -625,14 +644,9 @@
       const ok = confirm(`${table.name} seats ${table.capacity}, but this party is ${party}. Assign anyway?`);
       if (!ok) { renderList(); return; }
     }
-    const resp = await fetch(`/api/reservations/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ table_id: newTableId }),
-    });
-    if (resp.status === 409) {
-      const data = await resp.json().catch(() => ({}));
-      alert((data.error || `${table.name} is already held by another reservation at that time.`) +
+    const res = await withOverride(`/api/reservations/${id}`, 'PATCH', { table_id: newTableId });
+    if (!res.ok && !res.data.handled) {
+      alert((res.data.error || `${table.name} is already held by another reservation at that time.`) +
         '\n\nTables are held 90 minutes for parties of 4 or fewer and 2 hours for parties of 5 or more.');
     }
     load();
@@ -651,6 +665,26 @@
     });
     const data = await resp.json().catch(() => ({}));
     return { ok: resp.ok, data };
+  }
+
+  // Runs a request; if the server says a manager can override the block, asks for the code once
+  // and retries. The code is never stored.
+  async function withOverride(url, method, payload) {
+    let res = await postJson(url, method, payload);
+    if (!res.ok && res.data && res.data.overridable) {
+      const reasonText = res.data.error || 'This change is blocked.';
+      const code = prompt(`${reasonText}\n\nA manager can override this. Enter the manager code (or Cancel):`);
+      if (code) {
+        res = await postJson(url, method, { ...payload, override_code: code });
+        if (!res.ok && res.data && res.data.reason === 'bad_override') {
+          alert('That manager code was not correct. Nothing was changed.');
+          res.data.handled = true;
+        }
+      } else {
+        res.data.handled = true; // cancelled — stay quiet
+      }
+    }
+    return res;
   }
 
   $('walkin-btn').addEventListener('click', () => {
@@ -701,11 +735,11 @@
   };
   $('ed-save').addEventListener('click', async () => {
     if (editingId == null) return;
-    const { ok, data } = await postJson(`/api/reservations/${editingId}`, 'PATCH', {
+    const { ok, data } = await withOverride(`/api/reservations/${editingId}`, 'PATCH', {
       date: $('ed-date').value, time: $('ed-time').value, party_size: Number($('ed-party').value),
       guest_name: $('ed-name').value, phone: $('ed-phone').value, notes: $('ed-notes').value,
     });
-    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not save changes.') + '\n\nThe reservation was not changed.'); return; }
+    if (!ok) { if (!data.handled) alert((REASONS[data.reason] || data.error || 'Could not save changes.') + '\n\nThe reservation was not changed.'); return; }
     $('edit-panel').hidden = true; editingId = null;
     await load();
   });
@@ -756,8 +790,8 @@
       time = prompt('What time (24-hour, e.g. 18:30)?');
       if (!time) return;
     }
-    const { ok, data } = await postJson(`/api/waitlist/${id}/place`, 'POST', { mode, time, date });
-    if (!ok) { alert((REASONS[data.reason] || data.error || 'Could not place this party.') + '\n\nThey are still on the waitlist.'); return; }
+    const { ok, data } = await withOverride(`/api/waitlist/${id}/place`, 'POST', { mode, time, date });
+    if (!ok) { if (data.handled) return; alert((REASONS[data.reason] || data.error || 'Could not place this party.') + '\n\nThey are still on the waitlist.'); return; }
     await load();
   }
   $('wl-add').addEventListener('click', async () => {

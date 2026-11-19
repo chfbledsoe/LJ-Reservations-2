@@ -35,6 +35,8 @@
     font-family: inherit; font-size: 0.95rem; font-weight: 600; cursor: pointer;
     border-radius: 8px; border: none; padding: 12px 18px;
   }
+  label.optin{ display:flex; gap:10px; align-items:flex-start; font-weight:400; font-size:0.78rem; color:var(--ink-soft); line-height:1.4; margin-top:18px; }
+  label.optin input{ width:auto; margin-top:2px; flex:none; }
   .btn-primary{ background: var(--accent); color: #fff; width: 100%; margin-top: 22px; }
   .btn-primary:disabled{ opacity: 0.5; cursor: not-allowed; }
   .btn-secondary{ background: transparent; color: var(--accent); text-decoration: underline; padding: 8px 0; }
@@ -105,6 +107,11 @@
 
     <label for="notes">Notes (allergies, occasion, seating request)</label>
     <textarea id="notes"></textarea>
+
+    <label class="optin" for="optin">
+      <input type="checkbox" id="optin">
+      <span>Yes, I'd like to receive news, offers and promotions from Lakeside Bistro and Lake Junaluska by text message and email. Message and data rates may apply; reply STOP to unsubscribe at any time. This is optional &mdash; you don't need to agree to make a reservation.</span>
+    </label>
 
     <button type="submit" class="btn-primary">Confirm reservation</button>
     <button type="button" class="btn-secondary" id="back-btn">&larr; Choose a different time</button>
@@ -223,6 +230,7 @@
       guest_name: name,
       phone, email,
       notes: $('notes').value.trim(),
+      marketing_opt_in: $('optin').checked,
     };
 
     const btn = e.target.querySelector('button[type=submit]');
